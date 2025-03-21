@@ -147,6 +147,11 @@ def update_share_url(share_url):
     global SHARE_URL
     SHARE_URL = share_url
     logger.info(f"Gradio share URL updated: {share_url}")
+    # Print the share URL more prominently
+    print("\n" + "=" * 70)
+    print(f"SHARE URL: {share_url}")
+    print("Copy this URL to access the application from any device")
+    print("=" * 70 + "\n")
 
 # Forward declarations to ensure functions are defined before use
 def forward_to_download(username, password, guard_code, anonymous, game_input, validate_download):
@@ -688,63 +693,42 @@ def handle_login_toggle(anonymous):
     """Handle visibility of login fields based on anonymous selection"""
     return gr.update(visible=not anonymous)
 
-# Add simple main block for diagnostics
+# Main application entry point
 if __name__ == "__main__":
-    print("Starting application - minimal version for diagnostics")
+    print("="*50)
+    print("Starting Steam Games Downloader - FULL VERSION")
+    print("="*50)
     
-    # Define minimal required functions
-    def handle_game_check(input_text):
-        print(f"Game check requested for: {input_text}")
-        return [None, gr.update(visible=False), None, None, None, None, "Test mode - no game lookup performed"]
+    # Initialize background threads and services
+    download_queue_thread = threading.Thread(target=process_download_queue, daemon=True)
+    download_queue_thread.start()
     
-    def create_library_tab():
-        with gr.Tab("Library") as tab:
-            gr.Markdown("Library tab - disabled in diagnostic mode")
-        return tab
-    
-    def create_setup_tab():
-        with gr.Tab("Setup") as tab:
-            gr.Markdown("Setup tab - disabled in diagnostic mode")
-        return tab
-        
-    def create_settings_tab():
-        with gr.Tab("Settings") as tab:
-            gr.Markdown("Settings tab - disabled in diagnostic mode")
-        return tab
-    
-    def setup_refresh_interval():
-        return None
-    
-    def download_and_save_image(url, appid):
-        return None
-    
-    def get_default_download_location():
-        return os.path.join(os.path.expanduser("~"), "SteamLibrary")
-    
-    def parse_game_input(input_str):
-        return input_str if input_str.isdigit() else None
-        
-    def validate_appid(appid):
-        return True, {"name": f"Test Game {appid}", "short_description": "Test game description", "size_estimate": 1000000}
-        
-    def format_size(size_bytes):
-        return f"{size_bytes/1000000:.2f} MB"
-    
-    # Create a minimal interface with just the download tab
-    with gr.Blocks(title="Steam Games Downloader - Diagnostic Mode") as app:
-        gr.Markdown("# Steam Games Downloader (Diagnostic Mode)")
+    # Create the full user interface
+    with gr.Blocks(title="Steam Games Downloader") as app:
+        gr.Markdown("# Steam Games Downloader")
         
         with gr.Tabs():
             download_tab = create_download_games_tab()
-            
-        print("Interface created, launching...")
+            library_tab = create_library_tab()
+            setup_tab = create_setup_tab()
+            settings_tab = create_settings_tab()
         
-    # Launch with minimal options
+        # Set up periodic refresh for downloads
+        refresh_interval = setup_refresh_interval()
+            
+        print("Full interface created, launching application...")
+    
+    # Launch the application
     app.launch(
         server_port=int(os.environ.get("PORT", 7862)),
         server_name="0.0.0.0",
-        share=os.environ.get("ENABLE_SHARE", "False").lower() == "true",
-        debug=os.environ.get("DEBUG", "False").lower() == "true"
+        share=True,  # Always enable sharing
+        debug=os.environ.get("DEBUG", "False").lower() == "true",
+        share_callback=update_share_url  # Capture and display the share URL
     )
     
-    print("Application should be running now")
+    # Print confirmation after launch
+    print("="*50)
+    print("Application running. Access URLs listed above.")
+    print("Sharing is ENABLED - look for the 'Running on public URL:' link above")
+    print("="*50)
