@@ -4,6 +4,7 @@ import os
 import sys
 import logging
 import subprocess
+import time
 
 # Configure logging
 logging.basicConfig(
@@ -32,12 +33,16 @@ def main():
     print("Starting Steam Games Downloader in Docker container")
     print("="*50)
     
-    # Run the main application
-    try:
-        subprocess.run(["python", "main.py"], check=True)
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Application exited with error code {e.returncode}")
-        sys.exit(1)
+    # Run the main application with exec to replace this process
+    # This ensures signals are properly passed to the application
+    os.execvp("python", ["python", "main.py"])
+    
+    # The below code will not run due to os.execvp, but kept for reference
+    # try:
+    #     subprocess.run(["python", "main.py"], check=True)
+    # except subprocess.CalledProcessError as e:
+    #     logger.error(f"Application exited with error code {e.returncode}")
+    #     sys.exit(1)
 
 if __name__ == "__main__":
     main() 

@@ -1293,8 +1293,9 @@ if __name__ == "__main__":
     # Launch the application with simpler parameters to ensure compatibility
     app.launch(
         server_port=int(os.environ.get("PORT", 7862)),
-        server_name="0.0.0.0",
-        share=True
+        server_name="0.0.0.0",  # Bind to all interfaces
+        share=True,
+        prevent_thread_lock=True  # Keep the app running in a container
     )
     
     # Print confirmation after launch
