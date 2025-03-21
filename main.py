@@ -1247,18 +1247,16 @@ def install_steamcmd():
         # Try to download steamcmd directly
         try:
             logging.info("Downloading SteamCMD archive")
-            # Use wget instead of curl since it's more commonly available
-            subprocess.run(
-                ["wget", "-O", "steamcmd_linux.tar.gz", 
-                 "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz"],
-                check=True, timeout=120
+            # Use urllib instead of wget since wget might not be available
+            tar_path = os.path.join(steamcmd_dir, "steamcmd_linux.tar.gz")
+            urllib.request.urlretrieve(
+                "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz", 
+                tar_path
             )
             
             logging.info("Extracting SteamCMD")
-            subprocess.run(
-                ["tar", "-xzf", "steamcmd_linux.tar.gz"],
-                check=True
-            )
+            with tarfile.open(tar_path, 'r:gz') as tar_ref:
+                tar_ref.extractall(steamcmd_dir)
             
             if not os.path.exists("steamcmd.sh"):
                 logging.error("Failed to extract steamcmd.sh")
