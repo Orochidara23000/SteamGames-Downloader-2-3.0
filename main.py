@@ -843,14 +843,14 @@ def create_download_games_tab():
         )
         
         download_button.click(
-            fn=handle_download,
+            fn=download_handler,
             inputs=[game_input, username, password, guard_code, anonymous_login, 
                    validate_download, game_info_json],
             outputs=[status_box]
         )
         
         queue_button.click(
-            fn=handle_queue,
+            fn=queue_handler,
             inputs=[game_input, username, password, guard_code, anonymous_login, 
                    validate_download, game_info_json],
             outputs=[status_box]
@@ -1536,6 +1536,62 @@ def start_monitoring_thread():
     # Start the monitoring thread
     monitoring_thread = threading.Thread(target=monitor_loop, daemon=True)
     monitoring_thread.start()
+
+def download_handler(input_text, username, password, guard_code, anonymous, validate, game_info_json):
+    """Handle the download button press from the UI"""
+    try:
+        # Parse the game input
+        appid = parse_game_input(input_text)
+        if not appid:
+            return "Invalid input. Please enter a valid Steam AppID or URL."
+        
+        # Get game name from game_info_json if available
+        game_name = f"Game {appid}"
+        if game_info_json and isinstance(game_info_json, dict) and "name" in game_info_json:
+            game_name = game_info_json["name"]
+        
+        # Call the actual download function
+        result, download_id = handle_download(appid, game_name)
+        return result
+        
+    except Exception as e:
+        logging.error(f"Error in download handler: {str(e)}", exc_info=True)
+        return f"Error starting download: {str(e)}"
+
+def queue_handler(input_text, username, password, guard_code, anonymous, validate, game_info_json):
+    """Handle adding a download to the queue from the UI"""
+    try:
+        # Validate inputs based on login type
+        if not input_text:
+            return "Please enter a game ID or URL."
+            
+        if not anonymous and (not username or not password):
+            return "Steam username and password are required for non-anonymous downloads."
+        
+        # Parse game input
+        appid = parse_game_input(input_text)
+        if not appid:
+            return "Invalid game ID or URL format."
+        
+        # Add to queue
+        with queue_lock:
+            position = len(download_queue) + 1
+            download_queue.append({
+                "username": username,
+                "password": password,
+                "guard_code": guard_code,
+                "anonymous": anonymous,
+                "appid": appid,
+                "validate": validate,
+                "added_time": datetime.now()
+            })
+            logging.info(f"Added download for AppID {appid} to queue at position {position}")
+        
+        return f"Added download for AppID {appid} to queue at position {position}"
+            
+    except Exception as e:
+        logging.error(f"Queue error: {str(e)}")
+        return f"Error adding to queue: {str(e)}"
 
 # Main application entry point
 if __name__ == "__main__":
