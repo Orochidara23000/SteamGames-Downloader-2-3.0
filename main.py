@@ -26,41 +26,75 @@ import concurrent.futures
 import socket
 import urllib.request
 import traceback
+import stat
+
+# Define constants
+SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "steamapps")
+STEAMCMD_PATH = None  # Will be set later
+
+# Global variables
+active_downloads = {}  # Store active downloads
+monitoring_thread_running = False  # Flag for monitoring thread
+queue_lock = threading.Lock()  # Thread lock for active_downloads access
 
 # Define critical functions early to avoid undefined references
-def handle_download(game_input_text, username_val, password_val, guard_code_val, 
-                 anonymous_val, validate_val, game_info_json):
+def handle_download(appid, game_name, target_dir=None):
+    """Handle the download of a game"""
+    global active_downloads
+    global monitoring_thread_running
+
     try:
-        # Validate inputs based on login type
-        if not game_input_text:
-            return "Please enter a game ID or URL."
-            
-        if not anonymous_val and (not username_val or not password_val):
-            return "Steam username and password are required for non-anonymous downloads."
+        # Generate a unique download ID
+        download_id = f"dl_{appid}_{int(time.time())}"
         
-        # Parse game input
-        appid = parse_game_input(game_input_text)
-        if not appid:
-            return "Invalid game ID or URL format."
-            
-        # Start the download process
-        download_id = start_download(
-            username=username_val,
-            password=password_val,
-            guard_code=guard_code_val, 
-            anonymous=anonymous_val,
-            appid=appid,
-            validate_download=validate_val
+        # Set default download directory if not specified
+        if not target_dir:
+            target_dir = os.path.join(DOWNLOAD_DIR, "steamapps", "common", f"app_{appid}")
+        
+        # Create directory if it doesn't exist
+        os.makedirs(target_dir, exist_ok=True)
+        logging.info(f"Download directory created: {target_dir}")
+        
+        # Check if SteamCMD exists, if not try to install it
+        steamcmd_path = get_steamcmd_path()
+        logging.info(f"Using SteamCMD path: {steamcmd_path}")
+        
+        if not os.path.exists(steamcmd_path):
+            logging.warning(f"SteamCMD not found at {steamcmd_path}. Attempting to install...")
+            if not install_steamcmd():
+                return f"Error: Unable to install SteamCMD. Please install it manually at {steamcmd_path}", None
+        
+        # Setup the download
+        active_downloads[download_id] = {
+            "appid": appid,
+            "game_name": game_name,
+            "progress": 0,
+            "status": "Starting",
+            "speed": "0 MB/s",
+            "eta": "Calculating...",
+            "start_time": time.time(),
+            "target_dir": target_dir,
+            "process": None,
+        }
+        
+        # Start the download in a separate thread
+        download_thread = threading.Thread(
+            target=start_download_process,
+            args=(download_id, appid, target_dir),
+            daemon=True
         )
+        download_thread.start()
         
-        if download_id:
-            return f"Download started for AppID {appid}. Download ID: {download_id}"
-        else:
-            return "Failed to start download. Check logs for details."
-            
+        # Start monitoring thread if not already running
+        if not monitoring_thread_running:
+            start_monitoring_thread()
+        
+        return f"Download started for {game_name} (AppID: {appid})", download_id
+        
     except Exception as e:
-        logging.error(f"Download error: {str(e)}")
-        return f"Error: {str(e)}"
+        logging.error(f"Error starting download: {str(e)}", exc_info=True)
+        return f"Error starting download: {str(e)}", None
 
 def handle_queue(game_input_text, username_val, password_val, guard_code_val, 
                 anonymous_val, validate_val, game_info_json):
@@ -116,9 +150,7 @@ logger = logging.getLogger(__name__)
 logger.info(f"Starting Steam Downloader application (PID: {os.getpid()})")
 
 # Global variables for download management
-active_downloads = {}
 download_queue = []
-queue_lock = threading.Lock()
 download_history: List[dict] = []  # Track completed downloads
 MAX_HISTORY_SIZE = 50  # Maximum entries in download history
 
@@ -247,11 +279,34 @@ def parse_game_input(input_str):
     return None
 
 def get_steamcmd_path():
-    """Get the path to SteamCMD based on platform."""
+    """Get the path to SteamCMD based on OS"""
+    global STEAMCMD_PATH
+    
+    if STEAMCMD_PATH:
+        return STEAMCMD_PATH
+        
+    # Default paths based on OS
     if platform.system() == "Windows":
-        return os.path.join(os.getcwd(), "steamcmd", "steamcmd.exe")
+        default_path = os.path.join(os.path.expanduser("~"), "steamcmd", "steamcmd.exe")
+    elif platform.system() == "Linux":
+        default_path = os.path.join("/app", "steamcmd", "steamcmd.sh")
+    elif platform.system() == "Darwin":  # macOS
+        default_path = os.path.join(os.path.expanduser("~"), "steamcmd", "steamcmd.sh")
     else:
-        return os.path.join(os.getcwd(), "steamcmd", "steamcmd.sh")
+        default_path = os.path.join(os.path.expanduser("~"), "steamcmd", "steamcmd.sh")
+    
+    # Look for settings file
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, 'r') as f:
+                settings = json.load(f)
+                if "steamcmd_path" in settings and settings["steamcmd_path"]:
+                    return settings["steamcmd_path"]
+        except Exception as e:
+            logging.error(f"Error reading settings file: {str(e)}", exc_info=True)
+    
+    # Return default path
+    return default_path
 
 def validate_appid(appid):
     """Validate that an AppID exists and get basic information about it."""
@@ -315,205 +370,63 @@ def forward_to_download(username, password, guard_code, anonymous, game_input, v
     return queue_download(username, password, guard_code, anonymous, game_input, validate_download)
 
 def start_download(username, password, guard_code, anonymous, appid, validate_download):
-    """Start a download using SteamCMD."""
-    download_id = f"dl_{appid}_{int(time.time())}"
-    logging.info(f"Starting download with ID: {download_id} for AppID: {appid}")
-    
+    """Start a download with the given parameters"""
     try:
-        # Set up download directory
-        download_dir = os.path.join(STEAM_DOWNLOAD_PATH, f"steamapps/common/app_{appid}")
-        os.makedirs(download_dir, exist_ok=True)
-        logging.info(f"Download directory created: {download_dir}")
+        # Create a unique ID for this download
+        download_id = f"dl_{appid}_{int(time.time())}"
         
-        # Add to active downloads
-        with queue_lock:
-            active_downloads[download_id] = {
-                "appid": appid,
-                "name": f"Game (AppID: {appid})",
-                "start_time": datetime.now(),
-                "progress": 0.0,
-                "status": "Starting",
-                "eta": "Calculating...",
-                "process": None,
-                "speed": "0 KB/s",
-                "size_downloaded": "0 MB",
-                "total_size": "Unknown"
-            }
+        # Create download directory
+        target_dir = os.path.join(DOWNLOAD_DIR, "steamapps", "common", f"app_{appid}")
+        os.makedirs(target_dir, exist_ok=True)
+        logging.info(f"Download directory created: {target_dir}")
         
-        # Prepare SteamCMD command
+        # Get game info
+        game_name = f"Game {appid}"  # Default name if not available
+        game_info = get_game_info(appid)
+        if game_info and 'name' in game_info:
+            game_name = game_info['name']
+        
+        # Check SteamCMD exists
         steamcmd_path = get_steamcmd_path()
         logging.info(f"Using SteamCMD path: {steamcmd_path}")
         
-        # Verify SteamCMD exists
+        # Initialize the download entry
+        active_downloads[download_id] = {
+            "appid": appid,
+            "game_name": game_name,
+            "progress": 0,
+            "status": "Starting",
+            "speed": "0 MB/s",
+            "eta": "Calculating...",
+            "start_time": time.time(),
+            "target_dir": target_dir,
+            "process": None,
+        }
+        
         if not os.path.exists(steamcmd_path):
-            error_msg = f"Error: SteamCMD not found at {steamcmd_path}"
-            logging.error(error_msg)
-            
-            # For demo purposes, start a simulated download instead
-            logging.info("Starting SIMULATED download for demo purposes...")
-            
-            # Start a simulation thread
-            simulation_thread = threading.Thread(
-                target=simulate_download,
-                args=(download_id, appid),
-                daemon=True
-            )
-            simulation_thread.start()
-            
-            with queue_lock:
-                if download_id in active_downloads:
-                    active_downloads[download_id]["status"] = "Simulated Download (DEMO MODE)"
-            
-            return download_id
+            logging.error(f"Error: SteamCMD not found at {steamcmd_path}")
+            logging.warning(f"SteamCMD not found at {steamcmd_path}. Attempting to install...")
+            if not install_steamcmd():
+                active_downloads[download_id]["status"] = "Failed - SteamCMD installation failed"
+                return download_id
         
-        # Build command arguments
-        cmd_args = [steamcmd_path]
+        # Start the download in a separate thread
+        download_thread = threading.Thread(
+            target=start_download_process,
+            args=(download_id, appid, target_dir),
+            daemon=True
+        )
+        download_thread.start()
         
-        if anonymous:
-            cmd_args.extend(["+login", "anonymous"])
-            logging.info("Using anonymous login")
-        else:
-            cmd_args.extend(["+login", username, password])
-            logging.info(f"Using login for user: {username}")
-            if guard_code:
-                logging.info("Steam Guard code provided")
-                # In a real implementation, you would handle Steam Guard codes
-                pass
+        # Ensure the monitoring thread is running
+        if not monitoring_thread_running:
+            start_monitoring_thread()
         
-        cmd_args.extend([
-            "+force_install_dir", download_dir,
-            "+app_update", appid
-        ])
+        return download_id
         
-        if validate_download:
-            cmd_args.append("validate")
-        
-        cmd_args.append("+quit")
-        
-        # Start the SteamCMD process
-        cmd_string = ' '.join(cmd_args)
-        logging.info(f"Executing command: {cmd_string}")
-        
-        try:
-            # Test if SteamCMD is executable
-            if not os.access(steamcmd_path, os.X_OK) and platform.system() != "Windows":
-                logging.warning(f"SteamCMD is not executable. Attempting to set execute permission.")
-                os.chmod(steamcmd_path, 0o755)
-            
-            # Start process and capture output
-            logging.info("Starting subprocess.Popen...")
-            process = subprocess.Popen(
-                cmd_args,
-                stdout=subprocess.PIPE, 
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1  # Line buffered
-            )
-            
-            logging.info(f"Process started with PID: {process.pid}")
-            
-            # Update process info
-            with queue_lock:
-                if download_id in active_downloads:
-                    active_downloads[download_id]["process"] = process
-            
-            # Start a thread to monitor the process output
-            monitor_thread = threading.Thread(
-                target=monitor_download,
-                args=(download_id, process),
-                daemon=True
-            )
-            monitor_thread.start()
-            
-            return download_id
-            
-        except Exception as e:
-            logging.error(f"Error starting download process: {str(e)}", exc_info=True)
-            
-            with queue_lock:
-                if download_id in active_downloads:
-                    active_downloads[download_id]["status"] = f"Failed - {str(e)}"
-                    # Keep the failed download visible for a while
-                    threading.Timer(30, lambda: remove_completed_download(download_id)).start()
-            
-            process_download_queue()
-            return None
-            
     except Exception as e:
         logging.error(f"Error starting download: {str(e)}", exc_info=True)
         return None
-
-def simulate_download(download_id, appid):
-    """Simulate a download for demo purposes when SteamCMD isn't available"""
-    logging.info(f"Starting simulated download for {download_id}")
-    
-    # Simulate a game of 2-5 GB
-    import random
-    total_size_mb = random.randint(2000, 5000)
-    total_size_bytes = total_size_mb * 1024 * 1024
-    
-    # Update the active download entry
-    with queue_lock:
-        if download_id in active_downloads:
-            active_downloads[download_id]["total_size"] = f"{total_size_mb} MB"
-    
-    # Simulate download progress over time
-    downloaded = 0
-    start_time = time.time()
-    
-    # Simulate 5-10 minutes of download time, but faster for demo purposes
-    total_seconds = random.randint(30, 60)  # 30-60 seconds for demo
-    
-    while downloaded < total_size_bytes:
-        elapsed = time.time() - start_time
-        if elapsed >= total_seconds:
-            downloaded = total_size_bytes  # Complete the download
-        else:
-            # Calculate progress based on elapsed time
-            progress_pct = elapsed / total_seconds
-            downloaded = int(total_size_bytes * progress_pct)
-        
-        # Calculate speed (simulate 5-20 MB/s)
-        speed = downloaded / (elapsed if elapsed > 0 else 1)
-        
-        # Randomize a bit to make it look realistic
-        speed = speed * (0.8 + 0.4 * random.random())
-        
-        # Update the active download entry
-        with queue_lock:
-            if download_id in active_downloads:
-                active_downloads[download_id]["progress"] = round(downloaded / total_size_bytes * 100, 1)
-                active_downloads[download_id]["size_downloaded"] = f"{downloaded / (1024 * 1024):.1f} MB"
-                active_downloads[download_id]["speed"] = f"{speed / (1024 * 1024):.1f} MB/s"
-                
-                # Calculate ETA
-                if speed > 0:
-                    eta_seconds = (total_size_bytes - downloaded) / speed
-                    if eta_seconds < 60:
-                        eta_str = f"{int(eta_seconds)} sec"
-                    else:
-                        eta_str = f"{int(eta_seconds / 60)} min {int(eta_seconds % 60)} sec"
-                    active_downloads[download_id]["eta"] = eta_str
-                    
-                # Update status
-                active_downloads[download_id]["status"] = f"Downloading (DEMO MODE) - {active_downloads[download_id]['progress']}%"
-            else:
-                # Download was removed, exit the simulation
-                return
-        
-        # Sleep for a short period
-        time.sleep(1)
-    
-    # Download completed
-    with queue_lock:
-        if download_id in active_downloads:
-            active_downloads[download_id]["progress"] = 100.0
-            active_downloads[download_id]["status"] = "Completed (DEMO MODE)"
-            active_downloads[download_id]["eta"] = "Complete"
-            
-            # Move to history after a delay
-            logging.info(f"Simulated download completed for {download_id}")
-            threading.Timer(30, lambda: remove_completed_download(download_id)).start()
 
 def monitor_download(download_id, process):
     """Monitor the download process and update progress."""
@@ -1270,13 +1183,62 @@ def check_steamcmd_installation():
         return f"Error checking SteamCMD: {str(e)}"
 
 def install_steamcmd():
-    """Install SteamCMD"""
+    """Install SteamCMD if not present"""
     try:
-        # In a real implementation, you would download and install SteamCMD
-        return "SteamCMD installation not implemented in this demo version."
+        steamcmd_dir = os.path.dirname(get_steamcmd_path())
+        os.makedirs(steamcmd_dir, exist_ok=True)
+        
+        if platform.system() == "Windows":
+            # Windows installation
+            steamcmd_zip_url = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip"
+            zip_path = os.path.join(steamcmd_dir, "steamcmd.zip")
+            
+            logging.info(f"Downloading SteamCMD for Windows from {steamcmd_zip_url}")
+            urllib.request.urlretrieve(steamcmd_zip_url, zip_path)
+            
+            logging.info(f"Extracting SteamCMD to {steamcmd_dir}")
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(steamcmd_dir)
+            
+            # Remove the zip file
+            os.remove(zip_path)
+            
+        elif platform.system() == "Linux":
+            # Linux installation
+            steamcmd_tar_url = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz"
+            tar_path = os.path.join(steamcmd_dir, "steamcmd_linux.tar.gz")
+            
+            logging.info(f"Downloading SteamCMD for Linux from {steamcmd_tar_url}")
+            urllib.request.urlretrieve(steamcmd_tar_url, tar_path)
+            
+            logging.info(f"Extracting SteamCMD to {steamcmd_dir}")
+            with tarfile.open(tar_path, 'r:gz') as tar_ref:
+                tar_ref.extractall(steamcmd_dir)
+            
+            # Set execute permissions
+            st = os.stat(get_steamcmd_path())
+            os.chmod(get_steamcmd_path(), st.st_mode | stat.S_IEXEC)
+            
+            # Remove the tar file
+            os.remove(tar_path)
+            
+        else:
+            logging.error(f"Unsupported OS: {platform.system()}")
+            return False
+            
+        # Run SteamCMD once to complete installation
+        logging.info("Running SteamCMD for initial setup...")
+        if platform.system() == "Windows":
+            subprocess.run([get_steamcmd_path(), "+quit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        else:
+            subprocess.run([get_steamcmd_path(), "+quit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+        logging.info("SteamCMD installation completed successfully")
+        return True
+        
     except Exception as e:
         logging.error(f"Error installing SteamCMD: {str(e)}", exc_info=True)
-        return f"Error installing SteamCMD: {str(e)}"
+        return False
 
 def check_directories():
     """Check if necessary directories exist"""
@@ -1292,40 +1254,69 @@ def check_directories():
 def test_steam_api():
     """Test connection to Steam API"""
     try:
-        # In a real implementation, you would test the Steam API connection
-        return "Steam API connection test not implemented in this demo version."
+        # Test a simple Steam API call
+        test_url = "https://api.steampowered.com/ISteamApps/GetAppList/v2/"
+        response = requests.get(test_url, timeout=5)
+        if response.status_code == 200:
+            return "Steam API connection successful"
+        else:
+            return f"Steam API connection failed: HTTP {response.status_code}"
     except Exception as e:
         logging.error(f"Error testing Steam API: {str(e)}", exc_info=True)
-        return f"Error testing Steam API: {str(e)}"
+        return f"Steam API connection failed: {str(e)}"
 
 def check_linux_dependencies():
     """Check for required Linux dependencies"""
+    if platform.system() != "Linux":
+        return "Not applicable - this is not a Linux system"
+        
     try:
-        if platform.system() != "Linux":
-            return "This function is only relevant on Linux."
-            
-        # In a real implementation, you would check for required dependencies
-        return "Linux dependencies check not implemented in this demo version."
+        # Check for common dependencies required by SteamCMD
+        dependencies = ["lib32gcc-s1", "libsdl2-2.0-0"]
+        missing = []
+        
+        for dep in dependencies:
+            result = subprocess.run(["dpkg", "-s", dep], 
+                                   stdout=subprocess.PIPE, 
+                                   stderr=subprocess.PIPE,
+                                   text=True)
+            if result.returncode != 0:
+                missing.append(dep)
+                
+        if missing:
+            return f"Missing required dependencies: {', '.join(missing)}"
+        else:
+            return "All required Linux dependencies are installed"
     except Exception as e:
-        logging.error(f"Error checking Linux dependencies: {str(e)}", exc_info=True)
+        logging.error(f"Error checking dependencies: {str(e)}", exc_info=True)
         return f"Error checking dependencies: {str(e)}"
 
-def save_settings(download_location, max_downloads, auto_validate, theme, log_level, refresh_interval):
+def save_settings(download_path, steamcmd_path, autologin, anonymous, username, password):
     """Save application settings"""
     try:
-        # In a real implementation, you would save these settings
         settings = {
-            "download_location": download_location,
-            "max_downloads": max_downloads,
-            "auto_validate": auto_validate,
-            "theme": theme,
-            "log_level": log_level,
-            "refresh_interval": refresh_interval
+            "download_path": download_path,
+            "steamcmd_path": steamcmd_path,
+            "autologin": autologin,
+            "anonymous": anonymous
         }
         
-        logging.info(f"Saving settings: {settings}")
+        if not anonymous and username:
+            settings["username"] = username
+            if password:
+                # In a real app, you would encrypt this
+                settings["password"] = password
         
-        return "Settings saved successfully (simulated in this demo version)"
+        # Save settings to file
+        with open(SETTINGS_FILE, 'w') as f:
+            json.dump(settings, f)
+            
+        # Update global settings
+        global DOWNLOAD_DIR, STEAMCMD_PATH
+        DOWNLOAD_DIR = download_path
+        STEAMCMD_PATH = steamcmd_path
+        
+        return "Settings saved successfully"
     except Exception as e:
         logging.error(f"Error saving settings: {str(e)}", exc_info=True)
         return f"Error saving settings: {str(e)}"
@@ -1345,6 +1336,206 @@ def reset_settings():
     except Exception as e:
         logging.error(f"Error resetting settings: {str(e)}", exc_info=True)
         return None, None, None, None, None, None, f"Error resetting settings: {str(e)}"
+
+def start_download_process(download_id, appid, target_dir):
+    """Start the actual download process using SteamCMD"""
+    try:
+        if download_id not in active_downloads:
+            logging.error(f"Download ID {download_id} not found in active downloads")
+            return
+        
+        steamcmd_path = get_steamcmd_path()
+        if not os.path.exists(steamcmd_path):
+            logging.error(f"SteamCMD not found at {steamcmd_path}")
+            active_downloads[download_id]["status"] = "Failed - SteamCMD not found"
+            return
+        
+        # Build SteamCMD command
+        # Format is: steamcmd +login anonymous +app_update APPID +quit
+        cmd = [
+            steamcmd_path,
+            "+login", "anonymous",
+            "+force_install_dir", target_dir,
+            "+app_update", str(appid),
+            "+quit"
+        ]
+        
+        logging.info(f"Starting download process with command: {' '.join(cmd)}")
+        
+        # Start the process
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+        
+        # Store the process in active_downloads
+        active_downloads[download_id]["process"] = process
+        active_downloads[download_id]["status"] = "Downloading"
+        
+        # Process output in real-time to update progress
+        for line in iter(process.stdout.readline, ''):
+            if download_id not in active_downloads:
+                # Download was cancelled
+                process.terminate()
+                return
+                
+            # Parse SteamCMD output to update progress
+            update_download_progress(download_id, line)
+            
+        # Wait for process to complete
+        return_code = process.wait()
+        
+        if return_code == 0:
+            logging.info(f"Download completed successfully for {download_id}")
+            active_downloads[download_id]["progress"] = 100
+            active_downloads[download_id]["status"] = "Completed"
+            active_downloads[download_id]["speed"] = "0 MB/s"
+            active_downloads[download_id]["eta"] = "Completed"
+        else:
+            error_output = process.stderr.read()
+            logging.error(f"Download failed for {download_id}: {error_output}")
+            active_downloads[download_id]["status"] = f"Failed - Error code: {return_code}"
+        
+    except Exception as e:
+        logging.error(f"Error in download process for {download_id}: {str(e)}", exc_info=True)
+        if download_id in active_downloads:
+            active_downloads[download_id]["status"] = f"Failed - {str(e)}"
+
+def update_download_progress(download_id, line):
+    """Update download progress based on SteamCMD output"""
+    try:
+        if download_id not in active_downloads:
+            return
+            
+        # Example patterns to look for in SteamCMD output:
+        # Update state (downloading): 84.2% done
+        # Downloading update (12,345,678 of 23,456,789 bytes)...
+        # Download rate: 5.6 MB/s
+        
+        line = line.strip()
+        logging.debug(f"SteamCMD output: {line}")
+        
+        # Pattern 1: Progress percentage
+        progress_match = re.search(r'(\d+\.\d+)% done', line)
+        if progress_match:
+            progress = float(progress_match.group(1))
+            active_downloads[download_id]["progress"] = progress
+            
+        # Pattern 2: Download rate
+        speed_match = re.search(r'Download rate: (\d+\.\d+) ([KMG]B)/s', line)
+        if speed_match:
+            speed_value = float(speed_match.group(1))
+            speed_unit = speed_match.group(2)
+            active_downloads[download_id]["speed"] = f"{speed_value} {speed_unit}/s"
+            
+        # Pattern 3: Downloading bytes indicator
+        bytes_match = re.search(r'Downloading update \(([0-9,]+) of ([0-9,]+) bytes\)', line)
+        if bytes_match:
+            current_bytes = int(bytes_match.group(1).replace(',', ''))
+            total_bytes = int(bytes_match.group(2).replace(',', ''))
+            
+            if total_bytes > 0:
+                progress = (current_bytes / total_bytes) * 100
+                active_downloads[download_id]["progress"] = progress
+                
+                # Calculate ETA based on progress and elapsed time
+                elapsed_time = time.time() - active_downloads[download_id]["start_time"]
+                if progress > 0:
+                    total_time_estimate = elapsed_time * (100 / progress)
+                    remaining_time = total_time_estimate - elapsed_time
+                    
+                    # Format remaining time
+                    if remaining_time < 60:
+                        eta = f"{int(remaining_time)} seconds"
+                    elif remaining_time < 3600:
+                        eta = f"{int(remaining_time / 60)} minutes"
+                    else:
+                        hours = int(remaining_time / 3600)
+                        minutes = int((remaining_time % 3600) / 60)
+                        eta = f"{hours}h {minutes}m"
+                        
+                    active_downloads[download_id]["eta"] = eta
+        
+        # Update status based on specific messages
+        if "Validating installation" in line:
+            active_downloads[download_id]["status"] = "Validating"
+        elif "Downloading update" in line:
+            active_downloads[download_id]["status"] = "Downloading"
+        elif "Installing update" in line:
+            active_downloads[download_id]["status"] = "Installing"
+            
+    except Exception as e:
+        logging.error(f"Error updating progress for {download_id}: {str(e)}", exc_info=True)
+
+def start_monitoring_thread():
+    """Start a thread that periodically checks the status of downloads"""
+    global monitoring_thread_running
+    
+    if monitoring_thread_running:
+        return
+        
+    monitoring_thread_running = True
+    
+    def monitor_loop():
+        global monitoring_thread_running
+        while True:
+            try:
+                # Check if we have any active downloads
+                with queue_lock:
+                    if not active_downloads:
+                        monitoring_thread_running = False
+                        break
+                        
+                    # Check each download
+                    downloads_to_remove = []
+                    for download_id, download_info in active_downloads.items():
+                        # Check if the process is still running
+                        if download_info.get("process") and download_info["process"].poll() is not None:
+                            # Process has ended, check if it was successful
+                            if download_info["process"].returncode == 0:
+                                download_info["progress"] = 100
+                                download_info["status"] = "Completed"
+                                download_info["speed"] = "0 MB/s"
+                                download_info["eta"] = "Completed"
+                                logging.info(f"Download {download_id} completed successfully")
+                                downloads_to_remove.append(download_id)
+                            else:
+                                download_info["status"] = f"Failed - Error code: {download_info['process'].returncode}"
+                                logging.error(f"Download {download_id} failed with code {download_info['process'].returncode}")
+                                downloads_to_remove.append(download_id)
+                        
+                        # Check if the download has been running for too long (10 minutes without progress)
+                        elif download_info.get("status") == "Starting" and time.time() - download_info.get("start_time", 0) > 600:
+                            download_info["status"] = "Failed - Timed out waiting for SteamCMD to start"
+                            logging.error(f"Download {download_id} timed out waiting for SteamCMD to start")
+                            downloads_to_remove.append(download_id)
+                            
+                        # If download is complete, mark for removal after a delay
+                        elif download_info.get("status") == "Completed" and time.time() - download_info.get("start_time", 0) > 60:
+                            downloads_to_remove.append(download_id)
+                            
+                    # Remove completed downloads
+                    for download_id in downloads_to_remove:
+                        logging.info(f"Removing completed download {download_id} from active downloads")
+                        active_downloads.pop(download_id, None)
+                
+                # Log heartbeat
+                logging.info("Application heartbeat - still running")
+                
+                # Sleep for 10 seconds before checking again
+                time.sleep(10)
+                
+            except Exception as e:
+                logging.error(f"Error in monitoring thread: {str(e)}", exc_info=True)
+                time.sleep(10)  # Sleep and try again
+    
+    # Start the monitoring thread
+    monitoring_thread = threading.Thread(target=monitor_loop, daemon=True)
+    monitoring_thread.start()
 
 # Main application entry point
 if __name__ == "__main__":
