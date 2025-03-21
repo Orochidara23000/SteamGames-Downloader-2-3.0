@@ -741,9 +741,9 @@ if __name__ == "__main__":
         
     # Launch with minimal options
     app.launch(
-        server_port=7860,
+        server_port=7862,
         server_name="0.0.0.0",
-        share=False,
+        share=True,
         debug=True
     )
     
