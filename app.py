@@ -58,4 +58,4 @@ with gr.Blocks(title="Steam Games Downloader - Hugging Face Demo") as app:
 
 # Export for Hugging Face Spaces
 if __name__ == "__main__":
-    app.launch() 
+    app.launch(share=True) 

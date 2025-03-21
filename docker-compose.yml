@@ -10,6 +10,7 @@ services:
       - PORT=7862
       - LOG_LEVEL=INFO
       - STEAM_DOWNLOAD_PATH=/data/downloads
+      - ENABLE_SHARE=True
       - DEBUG=False
     volumes:
       - steam_downloads:/data/downloads
