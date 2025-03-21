@@ -1200,11 +1200,11 @@ def show_game_details(table_row):
         
         # Get data from first row (selected row)
         row_data = table_row.iloc[0]
-        game_name = row_data[0]
-        appid = row_data[1]
-        location = row_data[3]
-        size = row_data[2]
-        last_played = row_data[4]
+        game_name = row_data.iloc[0]    # Use iloc instead of [] for positional access
+        appid = row_data.iloc[1]        # Use iloc instead of [] for positional access
+        location = row_data.iloc[3]     # Use iloc instead of [] for positional access
+        size = row_data.iloc[2]         # Use iloc instead of [] for positional access
+        last_played = row_data.iloc[4]  # Use iloc instead of [] for positional access
         
         # In a real implementation, you would fetch additional details
         details = f"""
@@ -1230,8 +1230,8 @@ def verify_game_files(table_row):
             
         # Get data from first row (selected row)
         row_data = table_row.iloc[0]
-        game_name = row_data[0]
-        appid = row_data[1]
+        game_name = row_data.iloc[0]  # Use iloc instead of [] for positional access
+        appid = row_data.iloc[1]      # Use iloc instead of [] for positional access
         
         # In a real implementation, you would call SteamCMD to verify the files
         return f"Verification started for {game_name} (AppID: {appid})"
@@ -1247,8 +1247,8 @@ def uninstall_game(table_row):
         
         # Get data from first row (selected row)
         row_data = table_row.iloc[0]
-        game_name = row_data[0]
-        appid = row_data[1]
+        game_name = row_data.iloc[0]  # Use iloc instead of [] for positional access
+        appid = row_data.iloc[1]      # Use iloc instead of [] for positional access
         
         # In a real implementation, you would delete the game files
         return f"Uninstallation started for {game_name} (AppID: {appid})", None
