@@ -1195,19 +1195,24 @@ def refresh_library():
 def show_game_details(table_row):
     """Show details for a selected game"""
     try:
-        if not table_row or len(table_row) < 2:
+        if table_row is None or table_row.empty or len(table_row.index) == 0:
             return "No game selected"
-            
-        game_name = table_row[0]
-        appid = table_row[1]
+        
+        # Get data from first row (selected row)
+        row_data = table_row.iloc[0]
+        game_name = row_data[0]
+        appid = row_data[1]
+        location = row_data[3]
+        size = row_data[2]
+        last_played = row_data[4]
         
         # In a real implementation, you would fetch additional details
         details = f"""
 Game: {game_name}
 AppID: {appid}
-Location: {table_row[3]}
-Size: {table_row[2]}
-Last Played: {table_row[4]}
+Location: {location}
+Size: {size}
+Last Played: {last_played}
 
 This would show more detailed information about the game in a real implementation.
         """
@@ -1220,11 +1225,13 @@ This would show more detailed information about the game in a real implementatio
 def verify_game_files(table_row):
     """Verify the files of a selected game"""
     try:
-        if not table_row or len(table_row) < 2:
+        if table_row is None or table_row.empty or len(table_row.index) == 0:
             return "No game selected for verification"
             
-        game_name = table_row[0]
-        appid = table_row[1]
+        # Get data from first row (selected row)
+        row_data = table_row.iloc[0]
+        game_name = row_data[0]
+        appid = row_data[1]
         
         # In a real implementation, you would call SteamCMD to verify the files
         return f"Verification started for {game_name} (AppID: {appid})"
@@ -1235,11 +1242,13 @@ def verify_game_files(table_row):
 def uninstall_game(table_row):
     """Uninstall a selected game"""
     try:
-        if not table_row or len(table_row) < 2:
+        if table_row is None or table_row.empty or len(table_row.index) == 0:
             return "No game selected for uninstallation", None
-            
-        game_name = table_row[0]
-        appid = table_row[1]
+        
+        # Get data from first row (selected row)
+        row_data = table_row.iloc[0]
+        game_name = row_data[0]
+        appid = row_data[1]
         
         # In a real implementation, you would delete the game files
         return f"Uninstallation started for {game_name} (AppID: {appid})", None
