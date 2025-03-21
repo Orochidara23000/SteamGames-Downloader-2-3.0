@@ -19,6 +19,9 @@ RUN mkdir -p /data/downloads
 # Copy application files
 COPY . .
 
+# Make entrypoint script executable
+RUN chmod +x docker-entrypoint.py
+
 # Environment variables
 ENV PORT=7862
 ENV LOG_LEVEL=INFO
@@ -29,5 +32,5 @@ ENV DEBUG=False
 # Expose the port
 EXPOSE 7862
 
-# Run the application
-CMD ["python", "main.py"]
+# Run the application using the entrypoint script
+CMD ["python", "docker-entrypoint.py"]

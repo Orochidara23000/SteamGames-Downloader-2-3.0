@@ -1290,12 +1290,11 @@ if __name__ == "__main__":
             
         print("Full interface created, launching application...")
     
-    # Launch the application
+    # Launch the application with simpler parameters to ensure compatibility
     app.launch(
         server_port=int(os.environ.get("PORT", 7862)),
         server_name="0.0.0.0",
-        share=True,  # Always enable sharing
-        debug=os.environ.get("DEBUG", "False").lower() == "true"
+        share=True
     )
     
     # Print confirmation after launch
