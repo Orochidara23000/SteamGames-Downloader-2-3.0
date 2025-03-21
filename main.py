@@ -741,10 +741,10 @@ if __name__ == "__main__":
         
     # Launch with minimal options
     app.launch(
-        server_port=7862,
+        server_port=int(os.environ.get("PORT", 7862)),
         server_name="0.0.0.0",
-        share=True,
-        debug=True
+        share=os.environ.get("ENABLE_SHARE", "False").lower() == "true",
+        debug=os.environ.get("DEBUG", "False").lower() == "true"
     )
     
     print("Application should be running now")

@@ -2,15 +2,46 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Virtual environments
-venv/
+*.so
+.Python
 env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# IDEs and editors
-.vscode/
+# Virtual Environment
+venv/
+ENV/
+.env
+.venv/
+
+# IDE files
 .idea/
+.vscode/
+*.swp
+*.swo
 
-# Miscellaneous
+# Logs
+logs/
+*.log
+
+# Application specific
+.gradio_cache/
+steamcmd/
+downloads/
+*.pkl
+
+# OS specific
 .DS_Store
-steamcmd/  # Ignore the steamcmd directory as it's installed by the script
+Thumbs.db

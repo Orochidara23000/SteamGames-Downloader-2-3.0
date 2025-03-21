@@ -1,32 +1,33 @@
-FROM python:3.9-slim
+FROM python:3.10-slim
 
-# Install required system dependencies
-RUN apt-get update && \
-    apt-get install -y \
-    lib32gcc-s1 \
-    curl \
-    libcurl4 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Set working directory
 WORKDIR /app
 
-# Copy requirements first for better caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Install SteamCMD dependencies
+RUN apt-get update && apt-get install -y \
+    lib32gcc-s1 \
+    curl \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create directories
+RUN mkdir -p /app/logs
+RUN mkdir -p /data/downloads
 
 # Copy application files
 COPY . .
 
-# Make entrypoint script executable
-RUN chmod +x entrypoint.sh
-
-# Create directories for volumes
-RUN mkdir -p /data/downloads /app/steamcmd /app/logs
-
-# Set environment variables
-ENV STEAM_DOWNLOAD_PATH=/data/downloads
+# Environment variables
+ENV PORT=7862
 ENV LOG_LEVEL=INFO
+ENV STEAM_DOWNLOAD_PATH=/data/downloads
+ENV ENABLE_SHARE=False
+ENV DEBUG=False
 
-# Run the entrypoint script
-ENTRYPOINT ["/app/entrypoint.sh"]
+# Expose the port
+EXPOSE 7862
+
+# Run the application
+CMD ["python", "main.py"]
