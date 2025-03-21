@@ -82,17 +82,38 @@ def update_share_url(share_url):
 # ========================
 
 def get_default_download_location():
-    if STEAM_DOWNLOAD_PATH:
-        logger.info(f"Using environment variable for download path: {STEAM_DOWNLOAD_PATH}")
-        return STEAM_DOWNLOAD_PATH
-    if platform.system() == "Windows":
-        path = os.path.join(os.path.expanduser("~"), "SteamLibrary")
-    elif platform.system() == "Darwin":
-        path = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "SteamLibrary")
-    else:
-        path = os.path.join(os.path.expanduser("~"), "SteamLibrary")
-    logger.info(f"Using platform-specific download path: {path}")
-    return path
+    """Get the default download location based on platform and environment"""
+    # First check if we're in a Docker container by looking for STEAM_DOWNLOAD_PATH
+    if os.environ.get("STEAM_DOWNLOAD_PATH"):
+        return os.environ.get("STEAM_DOWNLOAD_PATH")
+    
+    # Otherwise use platform-specific locations
+    system = platform.system()
+    home = os.path.expanduser("~")
+    
+    if system == "Windows":
+        return os.path.join(home, "SteamLibrary")
+    elif system == "Darwin":  # macOS
+        return os.path.join(home, "Library", "Application Support", "SteamLibrary")
+    else:  # Linux and other Unix-like systems
+        return os.path.join(home, "SteamLibrary")
+
+def ensure_download_directory(path=None):
+    """Ensure the download directory exists and is writable"""
+    if not path:
+        path = get_default_download_location()
+    
+    try:
+        os.makedirs(path, exist_ok=True)
+        # Test if writable
+        test_file = os.path.join(path, ".write_test")
+        with open(test_file, "w") as f:
+            f.write("test")
+        os.remove(test_file)
+        return True, path
+    except Exception as e:
+        logging.error(f"Error creating/accessing download directory: {str(e)}")
+        return False, str(e)
 
 def get_steamcmd_path():
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1000,452 +1021,319 @@ def get_game_details(game_input):
 # ========================
 
 def create_download_games_tab():
-    """Create the Download Games tab with simplified, reliable functionality."""
-    with gr.Tab("Download Games"):
-        gr.Markdown("## Download Steam Games")
-        
+    with gr.Tab("Download Games") as tab:
         with gr.Row():
             with gr.Column(scale=2):
-                # Game Input Section
-                gr.Markdown("### Game Details")
-                game_input = gr.Textbox(
-                    label="Enter Steam Game URL, AppID, or Title",
-                    placeholder="e.g., https://store.steampowered.com/app/570/Dota_2/ or 570 or Dota 2",
-                    info="Accepts Steam store URLs, AppIDs, or game titles"
-                )
-                
-                game_info = gr.JSON(label="Game Information", visible=False)
-                game_status = gr.Markdown("")
-                check_button = gr.Button("Check Game", variant="secondary")
-                
-                # Login Section
-                gr.Markdown("### Steam Account (if required)")
-                anonymous_login = gr.Checkbox(
-                    label="Anonymous Login", 
-                    value=True,
-                    info="Use for free games and demos. For paid games, disable and provide credentials."
-                )
-                
-                with gr.Column(visible=False) as login_fields:
-                    username = gr.Textbox(label="Steam Username")
-                    password = gr.Textbox(label="Steam Password", type="password")
-                    guard_code = gr.Textbox(
-                        label="Steam Guard Code (if enabled)",
-                        placeholder="Leave empty if not needed"
+                # Game Information Section
+                with gr.Box():
+                    gr.Markdown("### Game Information")
+                    
+                    game_input = gr.Textbox(
+                        label="Game ID or Steam Store URL",
+                        placeholder="Enter AppID (e.g., 570) or Steam URL",
+                        info="Enter a valid Steam game ID or store URL"
                     )
-                
-                validate_download = gr.Checkbox(
-                    label="Validate Download", 
-                    value=True,
-                    info="Verify game files after download (recommended)"
-                )
-                
-                download_btn = gr.Button("Download Game", variant="primary")
-                download_status = gr.Markdown("")
-                
-            with gr.Column(scale=1):
-                # Game Preview
-                gr.Markdown("### Game Preview")
-                game_image = gr.Image(label="Game Image", type="filepath", interactive=False)
-                game_title = gr.Textbox(label="Title", interactive=False)
-                game_description = gr.Textbox(label="Description", interactive=False, lines=4)
-                game_size = gr.Textbox(label="Approximate Size", interactive=False)
-                
-        # Define function handlers
-        def handle_login_toggle(anonymous):
-            return not anonymous
-            
-        def handle_game_check(input_text):
-            """Check game details and return preview information."""
-            try:
-                if not input_text:
-                    return {}, "Please enter a game URL, ID, or title", None, "", "", ""
-                
-                print(f"Checking game: {input_text}")  # Debug print
-                
-                # For direct debug, if the user enters the AppID
-                if input_text.strip() == "1677740":
-                    # Fixed image URL with http instead of https
-                    header_image = "http://cdn.akamai.steamstatic.com/steam/apps/1677740/header.jpg"
-                    name = "Stumble Guys"
-                    description = "Race through obstacle courses against up to 32 players online. Run, jump and dash to the finish line until the best player takes the crown!"
                     
-                    # Try downloading the image to a local file
-                    local_image_path = "/tmp/game_image.jpg"
-                    try:
-                        import urllib.request
-                        urllib.request.urlretrieve(header_image, local_image_path)
-                        print(f"Image saved to {local_image_path}")
-                        # Use local file path instead of URL
-                        image_to_return = local_image_path
-                    except Exception as img_error:
-                        print(f"Failed to save image locally: {str(img_error)}")
-                        image_to_return = header_image  # Fall back to URL
+                check_button = gr.Button("Check Game Details", variant="secondary")
+                
+                game_info_json = gr.JSON(visible=False)
+                
+                with gr.Row(visible=False) as game_details_container:
+                    game_image = gr.Image(label="Game Image", show_label=False, type="filepath")
+                    
+                    with gr.Column():
+                        game_title = gr.Textbox(label="Game", interactive=False)
+                        game_description = gr.Textbox(label="Description", interactive=False, max_lines=3)
+                        game_size = gr.Textbox(label="Estimated Size", interactive=False)
+                
+                # Account Information Section
+                with gr.Box():
+                    gr.Markdown("### Steam Account")
+                    
+                    anonymous_login = gr.Checkbox(
+                        label="Anonymous Login (Free Games Only)",
+                        value=True,
+                        info="Use for free games. Paid games require login."
+                    )
+                    
+                    with gr.Column(visible=False) as login_container:
+                        username = gr.Textbox(
+                            label="Steam Username",
+                            placeholder="Your Steam account username"
+                        )
+                        password = gr.Textbox(
+                            label="Steam Password",
+                            placeholder="Your Steam account password",
+                            type="password",
+                            info="Credentials are only used for the current session and not stored"
+                        )
                         
-                    return {"appid": 1677740}, f"✅ Game found: {name} (AppID: 1677740)", image_to_return, name, description, "Unknown size"
+                        with gr.Accordion("Steam Guard (if enabled)", open=False):
+                            guard_code = gr.Textbox(
+                                label="Steam Guard Code",
+                                placeholder="Enter the code sent to your email or mobile app",
+                                info="Required if Steam Guard is enabled on your account"
+                            )
                 
-                # Regular processing for other inputs
-                result = parse_game_input(input_text)
-                
-                if isinstance(result, tuple):
-                    if len(result) == 2:
-                        appid, app_info = result
-                    else:
-                        return {}, "❌ Error: Unexpected result format", None, "", "", ""
-                else:
-                    if isinstance(result, str) and "Error" in result:
-                        return {}, f"❌ {result}", None, "", "", ""
-                    appid = result
-                    app_info = get_game_info(appid) if appid else {}
-                
-                if not appid or not app_info:
-                    return {}, "❌ Game not found", None, "", "", ""
-                
-                # Direct access to properties (no 'data' nesting)
-                name = app_info.get('name', 'Unknown Game')
-                description = app_info.get('short_description', 'No description available')
-                header_image = app_info.get('header_image', None)
-                
-                # Try to save the image locally
-                local_image_path = f"/tmp/game_image_{appid}.jpg"
-                if header_image:
-                    try:
-                        import urllib.request
-                        urllib.request.urlretrieve(header_image, local_image_path)
-                        print(f"Image saved to {local_image_path}")
-                        # Use local file path instead of URL
-                        image_to_return = local_image_path
-                    except Exception as img_error:
-                        print(f"Failed to save image locally: {str(img_error)}")
-                        image_to_return = header_image  # Fall back to URL
-                else:
-                    image_to_return = None
+                # Download Options Section
+                with gr.Box():
+                    gr.Markdown("### Download Options")
                     
-                # Get size if possible
-                size_text = "Size information unavailable"
-                try:
-                    size = get_game_size(appid)
-                    if size:
-                        size_text = format_size(size)
-                except Exception as e:
-                    print(f"Size error: {str(e)}")
-                
-                print(f"Returning: name={name}, image={image_to_return}, desc={description[:30]}...")
-                
-                return app_info, f"✅ Game found: {name} (AppID: {appid})", image_to_return, name, description, size_text
-                
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                print(f"Critical error in handle_game_check: {str(e)}")
-                return {}, f"❌ Error: {str(e)}", None, "", "", ""
-        
-        def handle_download(game_input_text, username_val, password_val, guard_code_val, 
-                           anonymous_val, validate_val, game_info_json):
-            """Handle the download button click with clear feedback."""
-            try:
-                print(f"Download button clicked for: {game_input_text}")  # Debug print
-                
-                if not game_input_text:
-                    return "❌ Please enter a game URL, ID, or title first."
-                
-                # Check if we have valid game info
-                if not game_info_json:
-                    return "❌ Please click 'Check Game' first to verify the game information."
+                    download_path = gr.Textbox(
+                        label="Download Location",
+                        value=get_default_download_location(),
+                        interactive=False,
+                        info="Set in application settings"
+                    )
                     
-                # Use queue_download which is defined earlier in the file
-                result = queue_download(
-                    username=username_val if not anonymous_val else "",
-                    password=password_val if not anonymous_val else "",
-                    guard_code=guard_code_val if not anonymous_val else "",
-                    anonymous=anonymous_val,
-                    game_input=game_input_text,
-                    validate=validate_val
-                )
-                
-                if isinstance(result, str) and "Error" in result:
-                    return f"❌ {result}"
-                else:
-                    return f"✅ Game added to download queue with ID: {result}"
+                    validate_download = gr.Checkbox(
+                        label="Verify Files After Download",
+                        value=True,
+                        info="Recommended to ensure download integrity"
+                    )
                     
-            except Exception as e:
-                print(f"Error in download handler: {str(e)}")  # Debug print
-                return f"❌ Error: {str(e)}"
+                    with gr.Row():
+                        download_button = gr.Button("Download Now", variant="primary")
+                        queue_button = gr.Button("Add to Queue", variant="secondary")
+            
+            # Right column for help/information
+            with gr.Column(scale=1):
+                gr.Markdown("### Download Information")
+                gr.Markdown("""
+                - Free games can be downloaded with Anonymous Login
+                - Paid games require your Steam account credentials
+                - Your credentials are never stored
+                - Downloads will be placed in the configured directory
+                - You can queue multiple downloads
+                """)
+                
+                gr.Markdown("### Status")
+                status_box = gr.Textbox(label="", interactive=False)
         
-        # Connect UI elements
-        anonymous_login.change(
-            fn=handle_login_toggle,
-            inputs=anonymous_login,
-            outputs=login_fields
-        )
+        # Event handlers
+        anonymous_login.change(fn=toggle_login_visibility, inputs=anonymous_login, outputs=login_container)
         
-        # Update the button click connection
         check_button.click(
             fn=handle_game_check,
-            inputs=[game_input],
-            outputs=[game_info, game_status, game_image, game_title, game_description, game_size]
+            inputs=game_input,
+            outputs=[game_info_json, game_details_container, game_image, game_title, 
+                     game_description, game_size, status_box]
         )
         
-        # Add a separate event to update the UI elements when game_info changes
-        def update_game_preview(game_info_json):
-            if not game_info_json or 'ui_data' not in game_info_json:
-                return None, "", "", ""
-            
-            ui_data = game_info_json['ui_data']
-            return (
-                ui_data.get('header_image'),
-                ui_data.get('name', ''),
-                ui_data.get('description', ''),
-                ui_data.get('size_text', '')
-            )
-        
-        # Connect the game_info change event to update the UI
-        game_info.change(
-            fn=update_game_preview,
-            inputs=game_info,
-            outputs=[game_image, game_title, game_description, game_size]
-        )
-        
-        download_btn.click(
+        download_button.click(
             fn=handle_download,
-            inputs=[
-                game_input,
-                username,
-                password,
-                guard_code,
-                anonymous_login,
-                validate_download,
-                game_info
-            ],
-            outputs=download_status
+            inputs=[game_input, username, password, guard_code, anonymous_login, 
+                   validate_download, game_info_json],
+            outputs=[status_box]
         )
         
-    # Return the necessary UI elements instead of None
-    return game_input, check_button, download_btn, game_status
+        queue_button.click(
+            fn=handle_queue,
+            inputs=[game_input, username, password, guard_code, anonymous_login, 
+                   validate_download, game_info_json],
+            outputs=[status_box]
+        )
+    
+    return tab
+
+def toggle_login_visibility(anonymous):
+    return gr.update(visible=not anonymous)
+
+def handle_game_check(input_text):
+    try:
+        # Parse the input (handle both IDs and URLs)
+        appid = parse_game_input(input_text)
+        if not appid:
+            return [None, gr.update(visible=False), None, None, None, None, 
+                    "Invalid input. Please enter a valid Steam AppID or store URL."]
+        
+        # Validate the AppID and get game info
+        valid, game_info = validate_appid(appid)
+        
+        if not valid or not game_info:
+            return [None, gr.update(visible=False), None, None, None, None, 
+                    f"Unable to find game with ID {appid}. Please check and try again."]
+        
+        # Extract game details for display
+        game_name = game_info.get("name", "Unknown")
+        game_desc = game_info.get("short_description", "No description available.")
+        game_image_url = game_info.get("header_image")
+        estimated_size = format_size(game_info.get("size_estimate", 0))
+        
+        # Download image if available
+        image_path = None
+        if game_image_url:
+            try:
+                image_path = download_and_save_image(game_image_url, appid)
+            except Exception as e:
+                logging.warning(f"Failed to download game image: {str(e)}")
+        
+        return [
+            game_info,  # Store the full game info JSON
+            gr.update(visible=True),  # Show the game details container
+            image_path,  # Game image
+            game_name,  # Game title
+            game_desc,  # Game description
+            f"Estimated size: {estimated_size}",  # Estimated size
+            f"Game found: {game_name}. Ready to download."  # Status message
+        ]
+    except Exception as e:
+        logging.error(f"Error checking game: {str(e)}")
+        return [None, gr.update(visible=False), None, None, None, None, 
+                f"Error: {str(e)}"]
 
 def create_downloads_tab():
-    """Create the 'Downloads' tab in the Gradio interface with real-time logs instead of tabular data."""
-    # Get initial data for tables
-    def get_system_stats():
-        return [
-            ["CPU Usage", f"{psutil.cpu_percent()}%"],
-            ["Memory Usage", f"{psutil.virtual_memory().percent}%"],
-            ["Disk Usage", f"{psutil.disk_usage('/').percent}%"],
-            ["Active Downloads", str(len(active_downloads))],
-            ["Queued Downloads", str(len(download_queue))]
-        ]
-    
-    def get_queue_data():
-        queue_data = []
-        for i, download in enumerate(download_queue):
-            appid = download["appid"]
-            queue_data.append([
-                i + 1,  # Position
-                appid,
-                f"Game (AppID: {appid})",
-                "Unknown",  # Size
-                "Yes" if download["validate"] else "No"  # Validate
-            ])
-        return queue_data
-    
-    def get_history_data():
-        history_data = []
-        for download in download_history[:10]:  # Show latest 10 entries
-            history_data.append([
-                download.get("id", "")[:8],  # Shorten ID
-                download.get("name", "Unknown"),
-                download.get("status", "Unknown"),
-                download.get("duration", "Unknown"),
-                download.get("end_time", datetime.now()).strftime("%Y-%m-%d %H:%M:%S") if isinstance(download.get("end_time"), datetime) else "Unknown"
-            ])
-        return history_data
-    
-    with gr.Tab("Downloads"):
+    with gr.Tab("Downloads") as tab:
         with gr.Row():
+            with gr.Column(scale=3):
+                # Active Downloads Section
+                with gr.Box():
+                    gr.Markdown("### Active Downloads")
+                    active_downloads = gr.Dataframe(
+                        headers=["ID", "Game", "Progress", "Speed", "ETA", "Status"],
+                        datatype=["str", "str", "str", "str", "str", "str"],
+                        row_count=5,
+                        col_count=(6, "fixed"),
+                        interactive=False
+                    )
+                    
+                    with gr.Row():
+                        cancel_download_btn = gr.Button("Cancel Selected", variant="stop")
+                        pause_download_btn = gr.Button("Pause/Resume", variant="secondary")
+                        refresh_active_btn = gr.Button("Refresh", variant="secondary")
+                
+                # Download Queue Section
+                with gr.Box():
+                    gr.Markdown("### Download Queue")
+                    queue_table = gr.Dataframe(
+                        headers=["Position", "Game", "Size", "Status"],
+                        datatype=["str", "str", "str", "str"],
+                        row_count=5,
+                        interactive=False
+                    )
+                    
+                    with gr.Row():
+                        remove_queue_btn = gr.Button("Remove Selected", variant="stop")
+                        move_up_btn = gr.Button("Move Up", variant="secondary")
+                        move_down_btn = gr.Button("Move Down", variant="secondary")
+                        refresh_queue_btn = gr.Button("Refresh Queue", variant="secondary")
+                
+                # Completed Downloads Section
+                with gr.Box():
+                    gr.Markdown("### Completed Downloads")
+                    history_table = gr.Dataframe(
+                        headers=["Game", "Size", "Completed", "Location", "Status"],
+                        datatype=["str", "str", "str", "str", "str"],
+                        row_count=5,
+                        interactive=False
+                    )
+                    
+                    with gr.Row():
+                        clear_history_btn = gr.Button("Clear History", variant="secondary")
+                        refresh_history_btn = gr.Button("Refresh History", variant="secondary")
+            
+            # Right column for download logs
             with gr.Column(scale=2):
-                gr.Markdown("### Download Progress")
-                # Replace the table with a scrolling log display
-                download_logs = gr.Textbox(
-                    label="Real-Time Download Progress",
-                    value="Waiting for downloads to start...\n",
-                    lines=20,
-                    max_lines=1000,
-                    autoscroll=True,
+                gr.Markdown("### Download Logs")
+                log_box = gr.Textbox(
+                    label="",
+                    value="Download logs will appear here...",
+                    max_lines=20,
                     interactive=False
                 )
                 
-                # Cancel functionality
-                with gr.Row():
-                    cancel_download_input = gr.Textbox(
-                        label="Download ID to Cancel",
-                        placeholder="Enter download ID to cancel"
-                    )
-                    cancel_download_btn = gr.Button("Cancel Download", variant="secondary")
-                cancel_output = gr.Textbox(label="Cancel Result", interactive=False)
-            
-            with gr.Column(scale=1):
-                gr.Markdown("### System Status")
-                # Instead of creating the dataframe first and then updating it,
-                # provide the initial value directly when creating it
-                initial_stats = [
-                    ["CPU Usage", f"{psutil.cpu_percent()}%"],
-                    ["Memory Usage", f"{psutil.virtual_memory().percent}%"],
-                    ["Disk Usage", f"{psutil.disk_usage('/').percent}%"],
-                    ["Active Downloads", str(len(active_downloads))],
-                    ["Queued Downloads", str(len(download_queue))]
-                ]
-                system_stats = gr.Dataframe(
-                    headers=["Metric", "Value"],
-                    value=initial_stats,  # Set initial value here
-                    interactive=False,
-                    wrap=True
-                )
-                
-                # Add refresh button for system stats
-                refresh_system_btn = gr.Button("Refresh Status")
+                clear_logs_btn = gr.Button("Clear Logs", variant="secondary")
         
-        with gr.Row():
-            with gr.Column():
-                gr.Markdown("### Download Queue")
-                queue_table = gr.Dataframe(
-                    headers=["Position", "App ID", "Name", "Size", "Validate?"],
-                    interactive=False,
-                    value=get_queue_data()  # Use function to get initial values
-                )
-                
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        remove_position = gr.Number(
-                            label="Queue Position to Remove",
-                            precision=0,
-                            value=1,
-                            minimum=1
-                        )
-                    with gr.Column(scale=1):
-                        remove_queue_btn = gr.Button("Remove from Queue", variant="secondary")
-                
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        from_position = gr.Number(
-                            label="Move From Position",
-                            precision=0,
-                            value=1,
-                            minimum=1
-                        )
-                    with gr.Column(scale=1):
-                        to_position = gr.Number(
-                            label="To Position",
-                            precision=0,
-                            value=2,
-                            minimum=1
-                        )
-                    with gr.Column(scale=1):
-                        move_queue_btn = gr.Button("Move in Queue", variant="secondary")
-                
-                queue_action_result = gr.Textbox(label="Queue Action Result", interactive=False)
-        
-        with gr.Row():
-            with gr.Column():
-                gr.Markdown("### Download History")
-                history_table = gr.Dataframe(
-                    headers=["ID", "Name", "Status", "Duration", "End Time"],
-                    interactive=False,
-                    value=get_history_data()  # Use function to get initial values
-                )
-        
-        # Set up a log handler to capture logs for the UI
-        class UILogHandler(logging.Handler):
-            def __init__(self, log_box):
-                super().__init__()
-                self.log_box = log_box
-                self.buffer = []
-                self.max_lines = 1000
-                self.lock = threading.Lock()
-                
-                # Format for download-related logs only
-                self.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
-                self.setLevel(logging.INFO)
-            
-            def emit(self, record):
-                if record.levelno >= self.level:
-                    # Only capture download-related logs
-                    msg = record.getMessage().lower()
-                    if "progress" in msg or "download" in msg or "speed" in msg or \
-                       "eta" in msg or "steamcmd" in msg:
-                        formatted = self.format(record)
-                        with self.lock:
-                            self.buffer.append(formatted)
-                            # Keep buffer size limited
-                            if len(self.buffer) > self.max_lines:
-                                self.buffer = self.buffer[-self.max_lines:]
-                            
-                            # Update the log box with the latest buffer content
-                            log_text = "\n".join(self.buffer)
-                            self.log_box.value = log_text
-        
-        # Function to update system stats and tables for refresh button
-        def update_system_stats():
-            return (
-                get_system_stats(),
-                get_queue_data(),
-                get_history_data()
-            )
-        
-        # Connect refresh button
-        refresh_system_btn.click(
-            fn=update_system_stats,
-            inputs=None,
-            outputs=[system_stats, queue_table, history_table]
-        )
-        
-        # Create and add the UI log handler
-        ui_log_handler = UILogHandler(download_logs)
-        logger.addHandler(ui_log_handler)
-        
-        # Connect cancel download button
-        def cancel_and_refresh(download_id):
-            result = cancel_download(download_id)
-            stats = get_system_stats()
-            queue = get_queue_data()
-            history = get_history_data()
-            return result, stats, queue, history
+        # Event handlers
+        refresh_active_btn.click(fn=update_active_downloads, outputs=[active_downloads])
+        refresh_queue_btn.click(fn=update_queue_data, outputs=[queue_table])
+        refresh_history_btn.click(fn=update_history_data, outputs=[history_table])
         
         cancel_download_btn.click(
             fn=cancel_and_refresh,
-            inputs=[cancel_download_input],
-            outputs=[cancel_output, system_stats, queue_table, history_table]
+            inputs=[active_downloads],
+            outputs=[active_downloads]
         )
-        
-        # Connect remove from queue button with refresh after
-        def remove_and_refresh(position):
-            result = remove_from_queue(position)
-            stats = get_system_stats()
-            queue = get_queue_data()
-            history = get_history_data()
-            return result, stats, queue, history
         
         remove_queue_btn.click(
             fn=remove_and_refresh,
-            inputs=[remove_position],
-            outputs=[queue_action_result, system_stats, queue_table, history_table]
+            inputs=[queue_table],
+            outputs=[queue_table]
         )
         
-        # Connect move in queue button with refresh after
-        def move_and_refresh(from_pos, to_pos):
-            result = reorder_queue(int(from_pos), int(to_pos))[1]
-            stats = get_system_stats()
-            queue = get_queue_data()
-            history = get_history_data()
-            return result, stats, queue, history
-        
-        move_queue_btn.click(
-            fn=move_and_refresh,
-            inputs=[from_position, to_position],
-            outputs=[queue_action_result, system_stats, queue_table, history_table]
+        move_up_btn.click(
+            fn=move_up_and_refresh,
+            inputs=[queue_table],
+            outputs=[queue_table]
         )
         
-    # Return None since we don't have refresh buttons to return
-    return None, None
+        move_down_btn.click(
+            fn=move_down_and_refresh,
+            inputs=[queue_table],
+            outputs=[queue_table]
+        )
+        
+        clear_logs_btn.click(
+            fn=lambda: "",
+            outputs=[log_box]
+        )
+        
+        # Set up automatic refresh
+        gr.on(
+            triggers=[active_downloads.change, queue_table.change],
+            fn=None,
+            inputs=None,
+            outputs=None,
+            _js="() => {setTimeout(() => {document.getElementById('refresh_active_btn').click();}, 5000);}"
+        )
+    
+    return tab
+
+def update_active_downloads(active_downloads):
+    return [
+        [f"{download['id'][:8]}", download['name'], f"{download['progress']}%", download['speed'], download['eta'], download['status']]
+        for download in active_downloads
+    ]
+
+def update_queue_data(queue_table):
+    return [
+        [f"{download['position']}", download['name'], f"{download['size']}", download['status']]
+        for download in queue_table
+    ]
+
+def update_history_data(history_table):
+    return [
+        [download['name'], download['size'], download['status'], download['location']]
+        for download in history_table
+    ]
+
+def cancel_and_refresh(active_downloads):
+    result = cancel_download(active_downloads[0]['id'])
+    stats = get_system_stats()
+    queue = get_queue_data()
+    history = get_history_data()
+    return result, stats, queue, history
+
+def remove_and_refresh(queue_table):
+    result = remove_from_queue(queue_table[0]['position'])
+    stats = get_system_stats()
+    queue = get_queue_data()
+    history = get_history_data()
+    return result, stats, queue, history
+
+def move_up_and_refresh(queue_table):
+    result = reorder_queue(int(queue_table[0]['position']) - 1, int(queue_table[0]['position']))[1]
+    stats = get_system_stats()
+    queue = get_queue_data()
+    history = get_history_data()
+    return result, stats, queue, history
+
+def move_down_and_refresh(queue_table):
+    result = reorder_queue(int(queue_table[0]['position']), int(queue_table[0]['position']) + 1)[1]
+    stats = get_system_stats()
+    queue = get_queue_data()
+    history = get_history_data()
+    return result, stats, queue, history
 
 # At the top of your file, add a print statement that will show in server logs
 print("Loading application with modified Setup tab")
@@ -1456,167 +1344,35 @@ def simple_test_function():
     return "Button was clicked successfully!"
 
 def create_gradio_interface():
-    """Create the main Gradio interface with all tabs."""
-    with gr.Blocks(title="Steam Game Downloader", theme=gr.themes.Soft()) as app:
-        gr.Markdown("# Steam Game Downloader")
-        gr.Markdown("Download Steam games directly using SteamCMD")
+    """Create the main Gradio interface with all tabs"""
+    with gr.Blocks(title="Steam Games Downloader", theme=gr.themes.Soft()) as app:
+        gr.Markdown("# Steam Games Downloader")
+        gr.Markdown("Download Steam games with a user-friendly interface")
         
         with gr.Tabs():
-            with gr.Tab("System Info"):
-                gr.Markdown("## System Information")
-                
-                with gr.Row():
-                    with gr.Column():
-                        gr.Markdown("### SteamCMD Status")
-                        status_text = gr.Markdown("✅ **SteamCMD is installed and operational**")
-                        
-                        # Simple system info instead of verification
-                        steamcmd_info = gr.Textbox(
-                            label="SteamCMD Info", 
-                            value=f"Location: {get_steamcmd_path()}\nInstallation: Automatic at startup",
-                            interactive=False
-                        )
-                        
-                    with gr.Column():
-                        gr.Markdown("### System Diagnostics")
-                        run_diagnostic_btn = gr.Button("Run System Diagnostics")
-                        diagnostic_result = gr.Textbox(label="Diagnostic Results", interactive=False)
-                        
-                        run_diagnostic_btn.click(
-                            fn=diagnose_environment,
-                            inputs=None,
-                            outputs=diagnostic_result
-                        )
-            
-            # Call the create_download_games_tab function here
-            game_input, check_game_btn, download_btn, check_game_result = create_download_games_tab()
-            
-            # Downloads tab (now returns None, None)
-            _ = create_downloads_tab()
-            
-            with gr.Tab("Settings"):
-                with gr.Row():
-                    with gr.Column():
-                        gr.Markdown("### Application Settings")
-                        log_level = gr.Dropdown(
-                            label="Log Level",
-                            choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-                            value=os.environ.get('LOG_LEVEL', 'INFO')
-                        )
-                        max_concurrent_downloads = gr.Slider(
-                            minimum=1,
-                            maximum=5,
-                            value=1,
-                            step=1,
-                            label="Max Concurrent Downloads",
-                            info="Note: Multiple concurrent downloads may impact performance"
-                        )
-                        auto_validate = gr.Checkbox(
-                            label="Auto-validate All Downloads",
-                            value=True,
-                            info="Automatically validate all downloads after completion"
-                        )
-                    
-                    with gr.Column():
-                        gr.Markdown("### Advanced Settings")
-                        steamcmd_args = gr.Textbox(
-                            label="Additional SteamCMD Arguments",
-                            placeholder="Enter any additional arguments to pass to SteamCMD"
-                        )
-                        debug_mode = gr.Checkbox(
-                            label="Debug Mode", 
-                            value=False,
-                            info="Enable verbose logging for troubleshooting"
-                        )
-                        keep_history = gr.Checkbox(
-                            label="Keep Download History",
-                            value=True,
-                            info="Save details of completed downloads"
-                        )
-                
-                save_settings_btn = gr.Button("Save Settings", variant="primary")
-                settings_status = gr.Textbox(label="Settings Status", interactive=False)
-                
-                def save_settings(log_level, max_concurrent, auto_validate, steamcmd_args, debug_mode, keep_history):
-                    try:
-                        # Update environment variable for log level
-                        os.environ['LOG_LEVEL'] = log_level
-                        logging.getLogger().setLevel(getattr(logging, log_level))
-                        
-                        # Store other settings (in a real app, these would be saved to a config file)
-                        global MAX_HISTORY_SIZE
-                        if keep_history:
-                            MAX_HISTORY_SIZE = 50
-                        else:
-                            MAX_HISTORY_SIZE = 0
-                            download_history.clear()
-                        
-                        # Note: In a real implementation, you'd save these to a config file
-                        logger.info(f"Settings updated - Log Level: {log_level}, Max Concurrent: {max_concurrent}")
-                        
-                        return "Settings saved successfully"
-                    except Exception as e:
-                        logger.error(f"Error saving settings: {str(e)}")
-                        return f"Error saving settings: {str(e)}"
-                
-                save_settings_btn.click(
-                    save_settings,
-                    inputs=[log_level, max_concurrent_downloads, auto_validate, steamcmd_args, debug_mode, keep_history],
-                    outputs=[settings_status]
-                )
-            
-            with gr.Tab("Help"):
-                gr.Markdown("""
-                ## Steam Game Downloader Help
-                
-                ### Quick Start Guide
-                1. Go to the **Setup Tab** and install SteamCMD if not already installed
-                2. Go to the **Download Games Tab** and enter a game ID or Steam store URL
-                3. Click "Check Game" to verify and see game details
-                4. Choose your login method (Anonymous for free games)
-                5. Click "Download Game" to start or queue the download
-                6. Monitor your downloads in the **Downloads Tab**
-                
-                ### Finding Game IDs
-                - The AppID is the number in the URL of a Steam store page
-                - Example: For `https://store.steampowered.com/app/570/Dota_2/` the AppID is `570`
-                
-                ### Anonymous Login
-                - Only works for free-to-play games and demos
-                - For paid games, you must provide your Steam credentials
-                
-                ### Download Options
-                - **Validate Files**: Verifies all downloaded files are correct (recommended)
-                - **Add to Queue**: Adds to queue instead of starting immediately
-                
-                ### Download Management
-                - You can cancel active downloads
-                - Queued downloads can be reordered or removed
-                - System resources are monitored to ensure stable downloads
-                
-                ### Troubleshooting
-                - If downloads fail, try reinstalling SteamCMD in the Setup tab
-                - Check your available disk space
-                - For paid games, ensure your credentials are correct
-                - Look for detailed error messages in the Downloads tab
-                """)
+            # Create main tabs
+            download_tab = create_download_games_tab()
+            downloads_tab = create_downloads_tab()
+            library_tab = create_library_tab()
+            setup_tab = create_setup_tab()
+            settings_tab = create_settings_tab()
         
-        # Start background thread for processing queue
-        queue_thread = threading.Thread(target=queue_processor)
-        queue_thread.daemon = True
-        queue_thread.start()
-    
-    # Set up signal handlers for graceful shutdown
-    def signal_handler(sig, frame):
-        logger.info("Shutting down Steam Downloader...")
-        # Terminate all active downloads
-        with queue_lock:
-            for download_id in list(active_downloads.keys()):
-                cancel_download(download_id)
-        sys.exit(0)
-    
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+        # Setup automatic refresh of dynamic content
+        app.load(
+            fn=setup_refresh_interval,
+            inputs=None,
+            outputs=None,
+            _js="""
+            function() {
+                // Refresh active downloads every 3 seconds
+                setInterval(function() {
+                    if (document.querySelector('.tab-nav button.selected').textContent === 'Downloads') {
+                        document.getElementById('refresh_active_btn').click();
+                    }
+                }, 3000);
+            }
+            """
+        )
     
     return app
 
@@ -2185,3 +1941,57 @@ def download_game(username, password, guard_code, anonymous, game_input, validat
 def forward_to_download(username, password, guard_code, anonymous, game_input, validate_download):
     """Forward function to handle circular imports"""
     return queue_download(username, password, guard_code, anonymous, game_input, validate_download)
+
+def handle_download(game_input_text, username_val, password_val, guard_code_val, 
+                 anonymous_val, validate_val, game_info_json):
+    try:
+        # Validate inputs based on login type
+        if not game_input_text:
+            return "Please enter a game ID or URL."
+            
+        if not anonymous_val and (not username_val or not password_val):
+            return "Steam username and password are required for non-anonymous downloads."
+        
+        # Parse game input
+        appid = parse_game_input(game_input_text)
+        if not appid:
+            return "Invalid game ID or URL format."
+            
+        # Start the download process
+        download_id = start_download(
+            username=username_val,
+            password=password_val,
+            guard_code=guard_code_val, 
+            anonymous=anonymous_val,
+            appid=appid,
+            validate_download=validate_val
+        )
+        
+        if download_id:
+            return f"Download started for AppID {appid}. Download ID: {download_id}"
+        else:
+            return "Failed to start download. Check logs for details."
+            
+    except Exception as e:
+        logging.error(f"Download error: {str(e)}")
+        return f"Error: {str(e)}"
+
+def handle_login_toggle(anonymous):
+    """Handle visibility of login fields based on anonymous selection"""
+    return gr.update(visible=not anonymous)
+
+def validate_login(username, password, guard_code, anonymous):
+    """Validate login credentials before attempting download"""
+    if anonymous:
+        return True, "Anonymous login selected"
+    
+    if not username or not password:
+        return False, "Username and password are required for non-anonymous login"
+    
+    # You might want to add basic validation here
+    # For example, checking if the username format is valid
+    
+    # For a real implementation, you could test the credentials with SteamCMD
+    # But that would require running SteamCMD, which is better left for the actual download
+    
+    return True, "Login information provided"
