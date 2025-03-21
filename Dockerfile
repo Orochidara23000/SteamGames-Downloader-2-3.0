@@ -3,6 +3,8 @@ FROM python:3.10-slim
 WORKDIR /app
 
 COPY requirements.txt .
+# Install a specific version of Gradio that's known to work
+RUN pip install --no-cache-dir gradio==3.50.2
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install SteamCMD dependencies
