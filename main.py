@@ -1343,6 +1343,149 @@ def simple_test_function():
     print("simple_test_function was called!")  # This will show in server logs
     return "Button was clicked successfully!"
 
+def setup_refresh_interval():
+    """Function to set up refresh intervals for dynamic content"""
+    # This function doesn't need to do anything in Python
+    # It's just used as a placeholder for the JavaScript in app.load
+    return None
+
+def create_library_tab():
+    """Create the library tab for viewing installed games"""
+    with gr.Tab("Library") as tab:
+        with gr.Row():
+            with gr.Column():
+                gr.Markdown("### Installed Games")
+                
+                library_table = gr.Dataframe(
+                    headers=["Game", "App ID", "Size", "Location", "Status"],
+                    datatype=["str", "str", "str", "str", "str"],
+                    row_count=10,
+                    interactive=False
+                )
+                
+                refresh_library_btn = gr.Button("Refresh Library", variant="primary")
+                
+                status_box = gr.Textbox(label="Status", interactive=False)
+                
+                refresh_library_btn.click(
+                    fn=refresh_library,
+                    outputs=[library_table, status_box]
+                )
+                
+    return tab
+
+def refresh_library():
+    """Refresh the library of installed games"""
+    # This would normally scan for installed games
+    # Returning placeholders for now
+    return [], "Library refreshed successfully"
+
+def create_setup_tab():
+    """Create the setup tab for SteamCMD configuration"""
+    with gr.Tab("Setup") as tab:
+        with gr.Row():
+            with gr.Column():
+                gr.Markdown("### SteamCMD Setup")
+                
+                status_box = gr.Textbox(
+                    label="SteamCMD Status",
+                    value="Click 'Check SteamCMD Installation' to verify installation status",
+                    interactive=False
+                )
+                
+                with gr.Row():
+                    check_btn = gr.Button("Check SteamCMD Installation", variant="secondary")
+                    install_btn = gr.Button("Install SteamCMD", variant="primary")
+                
+                check_btn.click(
+                    fn=check_steamcmd,
+                    outputs=[status_box]
+                )
+                
+                install_btn.click(
+                    fn=lambda: install_steamcmd()[0],
+                    outputs=[status_box]
+                )
+                
+                gr.Markdown("### System Diagnostics")
+                
+                diag_output = gr.Textbox(
+                    label="Diagnostics Output",
+                    value="Click 'Run Diagnostics' to check your system",
+                    interactive=False,
+                    lines=10
+                )
+                
+                diag_btn = gr.Button("Run Diagnostics", variant="secondary")
+                
+                diag_btn.click(
+                    fn=diagnose_environment,
+                    outputs=[diag_output]
+                )
+                
+    return tab
+
+def create_settings_tab():
+    """Create the settings tab for application configuration"""
+    with gr.Tab("Settings") as tab:
+        with gr.Row():
+            with gr.Column():
+                gr.Markdown("### Application Settings")
+                
+                log_level = gr.Dropdown(
+                    label="Log Level",
+                    choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+                    value="INFO"
+                )
+                
+                max_concurrent = gr.Slider(
+                    label="Maximum Concurrent Downloads",
+                    minimum=1,
+                    maximum=5,
+                    value=1,
+                    step=1
+                )
+                
+                auto_validate = gr.Checkbox(
+                    label="Automatically Validate Downloads",
+                    value=True,
+                    info="Recommended to ensure download integrity"
+                )
+                
+                steamcmd_args = gr.Textbox(
+                    label="Additional SteamCMD Arguments",
+                    placeholder="Enter any additional arguments for SteamCMD"
+                )
+                
+                debug_mode = gr.Checkbox(
+                    label="Debug Mode",
+                    value=False,
+                    info="Enable debug mode for additional logging"
+                )
+                
+                keep_history = gr.Checkbox(
+                    label="Keep Download History",
+                    value=True,
+                    info="Store completed download information"
+                )
+                
+                save_btn = gr.Button("Save Settings", variant="primary")
+                
+                status_box = gr.Textbox(label="Status", interactive=False)
+                
+                save_btn.click(
+                    fn=save_settings,
+                    inputs=[log_level, max_concurrent, auto_validate, steamcmd_args, debug_mode, keep_history],
+                    outputs=[status_box]
+                )
+                
+    return tab
+
+def save_settings(log_level, max_concurrent, auto_validate, steamcmd_args, debug_mode, keep_history):
+    """Save application settings"""
+    # This would normally save to a config file
+    return "Settings saved successfully"
+
 def create_gradio_interface():
     """Create the main Gradio interface with all tabs"""
     with gr.Blocks(title="Steam Games Downloader", theme=gr.themes.Soft()) as app:
@@ -1975,6 +2118,42 @@ def handle_download(game_input_text, username_val, password_val, guard_code_val,
     except Exception as e:
         logging.error(f"Download error: {str(e)}")
         return f"Error: {str(e)}"
+
+def handle_queue(game_input_text, username_val, password_val, guard_code_val, 
+                anonymous_val, validate_val, game_info_json):
+    """Add a download to the queue instead of starting it immediately"""
+    try:
+        # Validate inputs based on login type
+        if not game_input_text:
+            return "Please enter a game ID or URL."
+            
+        if not anonymous_val and (not username_val or not password_val):
+            return "Steam username and password are required for non-anonymous downloads."
+        
+        # Parse game input
+        appid = parse_game_input(game_input_text)
+        if not appid:
+            return "Invalid game ID or URL format."
+        
+        # Add to queue
+        with queue_lock:
+            position = len(download_queue) + 1
+            download_queue.append({
+                "username": username_val,
+                "password": password_val,
+                "guard_code": guard_code_val,
+                "anonymous": anonymous_val,
+                "appid": appid,
+                "validate": validate_val,
+                "added_time": datetime.now()
+            })
+            logging.info(f"Added download for AppID {appid} to queue at position {position}")
+        
+        return f"Added download for AppID {appid} to queue at position {position}"
+            
+    except Exception as e:
+        logging.error(f"Queue error: {str(e)}")
+        return f"Error adding to queue: {str(e)}"
 
 def handle_login_toggle(anonymous):
     """Handle visibility of login fields based on anonymous selection"""
