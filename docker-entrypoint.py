@@ -5,6 +5,7 @@ import sys
 import logging
 import subprocess
 import time
+import signal
 
 # Configure logging
 logging.basicConfig(
@@ -16,6 +17,13 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+# Handle SIGTERM gracefully
+def handle_sigterm(signum, frame):
+    logger.info("Received SIGTERM signal, shutting down...")
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, handle_sigterm)
 
 def main():
     logger.info("Starting Steam Games Downloader Docker entrypoint...")
@@ -33,16 +41,37 @@ def main():
     print("Starting Steam Games Downloader in Docker container")
     print("="*50)
     
-    # Run the main application with exec to replace this process
-    # This ensures signals are properly passed to the application
-    os.execvp("python", ["python", "main.py"])
+    # Start the main application in a subprocess
+    process = subprocess.Popen(["python", "main.py"])
     
-    # The below code will not run due to os.execvp, but kept for reference
-    # try:
-    #     subprocess.run(["python", "main.py"], check=True)
-    # except subprocess.CalledProcessError as e:
-    #     logger.error(f"Application exited with error code {e.returncode}")
-    #     sys.exit(1)
+    # Wait for a short time to make sure Gradio has time to start
+    time.sleep(5)
+    
+    # Keep container running until stopped
+    logger.info("Main application started. Container will stay running until stopped.")
+    try:
+        # Check if process is still running and keep the container alive
+        while process.poll() is None:
+            time.sleep(1)
+            
+        # If we get here, the process has exited
+        exit_code = process.returncode
+        logger.info(f"Main application exited with code {exit_code}")
+        if exit_code != 0:
+            logger.error("Main application crashed. Check logs for details.")
+        
+    except KeyboardInterrupt:
+        logger.info("Received keyboard interrupt, shutting down...")
+    finally:
+        # Try to clean up the process if it's still running
+        if process.poll() is None:
+            logger.info("Terminating main application...")
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                logger.warning("Application did not terminate gracefully, forcing...")
+                process.kill()
 
 if __name__ == "__main__":
     main() 
