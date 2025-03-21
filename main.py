@@ -686,3 +686,65 @@ def toggle_login_visibility(anonymous):
 
 def handle_login_toggle(anonymous):
     """Handle visibility of login fields based on anonymous selection"""
+    return gr.update(visible=not anonymous)
+
+# Add simple main block for diagnostics
+if __name__ == "__main__":
+    print("Starting application - minimal version for diagnostics")
+    
+    # Define minimal required functions
+    def handle_game_check(input_text):
+        print(f"Game check requested for: {input_text}")
+        return [None, gr.update(visible=False), None, None, None, None, "Test mode - no game lookup performed"]
+    
+    def create_library_tab():
+        with gr.Tab("Library") as tab:
+            gr.Markdown("Library tab - disabled in diagnostic mode")
+        return tab
+    
+    def create_setup_tab():
+        with gr.Tab("Setup") as tab:
+            gr.Markdown("Setup tab - disabled in diagnostic mode")
+        return tab
+        
+    def create_settings_tab():
+        with gr.Tab("Settings") as tab:
+            gr.Markdown("Settings tab - disabled in diagnostic mode")
+        return tab
+    
+    def setup_refresh_interval():
+        return None
+    
+    def download_and_save_image(url, appid):
+        return None
+    
+    def get_default_download_location():
+        return os.path.join(os.path.expanduser("~"), "SteamLibrary")
+    
+    def parse_game_input(input_str):
+        return input_str if input_str.isdigit() else None
+        
+    def validate_appid(appid):
+        return True, {"name": f"Test Game {appid}", "short_description": "Test game description", "size_estimate": 1000000}
+        
+    def format_size(size_bytes):
+        return f"{size_bytes/1000000:.2f} MB"
+    
+    # Create a minimal interface with just the download tab
+    with gr.Blocks(title="Steam Games Downloader - Diagnostic Mode") as app:
+        gr.Markdown("# Steam Games Downloader (Diagnostic Mode)")
+        
+        with gr.Tabs():
+            download_tab = create_download_games_tab()
+            
+        print("Interface created, launching...")
+        
+    # Launch with minimal options
+    app.launch(
+        server_port=7860,
+        server_name="0.0.0.0",
+        share=False,
+        debug=True
+    )
+    
+    print("Application should be running now")
