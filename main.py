@@ -1025,7 +1025,7 @@ def create_download_games_tab():
         with gr.Row():
             with gr.Column(scale=2):
                 # Game Information Section
-                with gr.Box():
+                with gr.Group():
                     gr.Markdown("### Game Information")
                     
                     game_input = gr.Textbox(
@@ -1047,7 +1047,7 @@ def create_download_games_tab():
                         game_size = gr.Textbox(label="Estimated Size", interactive=False)
                 
                 # Account Information Section
-                with gr.Box():
+                with gr.Group():
                     gr.Markdown("### Steam Account")
                     
                     anonymous_login = gr.Checkbox(
@@ -1076,7 +1076,7 @@ def create_download_games_tab():
                             )
                 
                 # Download Options Section
-                with gr.Box():
+                with gr.Group():
                     gr.Markdown("### Download Options")
                     
                     download_path = gr.Textbox(
@@ -1187,7 +1187,7 @@ def create_downloads_tab():
         with gr.Row():
             with gr.Column(scale=3):
                 # Active Downloads Section
-                with gr.Box():
+                with gr.Group():
                     gr.Markdown("### Active Downloads")
                     active_downloads = gr.Dataframe(
                         headers=["ID", "Game", "Progress", "Speed", "ETA", "Status"],
@@ -1203,7 +1203,7 @@ def create_downloads_tab():
                         refresh_active_btn = gr.Button("Refresh", variant="secondary")
                 
                 # Download Queue Section
-                with gr.Box():
+                with gr.Group():
                     gr.Markdown("### Download Queue")
                     queue_table = gr.Dataframe(
                         headers=["Position", "Game", "Size", "Status"],
@@ -1219,7 +1219,7 @@ def create_downloads_tab():
                         refresh_queue_btn = gr.Button("Refresh Queue", variant="secondary")
                 
                 # Completed Downloads Section
-                with gr.Box():
+                with gr.Group():
                     gr.Markdown("### Completed Downloads")
                     history_table = gr.Dataframe(
                         headers=["Game", "Size", "Completed", "Location", "Status"],
