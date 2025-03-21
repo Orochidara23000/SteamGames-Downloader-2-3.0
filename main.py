@@ -1226,170 +1226,110 @@ def check_steamcmd_installation():
         return f"Error checking SteamCMD: {str(e)}"
 
 def install_steamcmd():
-    """Install SteamCMD if not present"""
+    """Install SteamCMD on Linux"""
     try:
-        steamcmd_dir = os.path.dirname(get_steamcmd_path())
+        logging.info("Installing SteamCMD for Linux")
+
+        # Create steamcmd directory
+        steamcmd_dir = os.path.expanduser("~/steamcmd")
         os.makedirs(steamcmd_dir, exist_ok=True)
+        os.chdir(steamcmd_dir)
         
-        if platform.system() == "Windows":
-            # Windows installation
-            steamcmd_zip_url = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip"
-            zip_path = os.path.join(steamcmd_dir, "steamcmd.zip")
+        # Try to install dependencies first (might fail in restricted environments)
+        try:
+            logging.info("Installing dependencies")
+            subprocess.run("apt-get update && apt-get install -y lib32gcc1 lib32stdc++6", 
+                          shell=True, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except Exception as e:
+            logging.warning(f"Failed to install dependencies, but continuing anyway: {str(e)}")
+            logging.warning("This is expected in Docker containers without apt-get access")
+
+        # Try to download steamcmd directly
+        try:
+            logging.info("Downloading SteamCMD archive")
+            # Use wget instead of curl since it's more commonly available
+            subprocess.run(
+                ["wget", "-O", "steamcmd_linux.tar.gz", 
+                 "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz"],
+                check=True, timeout=120
+            )
             
-            logging.info(f"Downloading SteamCMD for Windows from {steamcmd_zip_url}")
-            urllib.request.urlretrieve(steamcmd_zip_url, zip_path)
+            logging.info("Extracting SteamCMD")
+            subprocess.run(
+                ["tar", "-xzf", "steamcmd_linux.tar.gz"],
+                check=True
+            )
             
-            logging.info(f"Extracting SteamCMD to {steamcmd_dir}")
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(steamcmd_dir)
-            
-            # Remove the zip file
-            os.remove(zip_path)
-            
-        elif platform.system() == "Linux":
-            # Linux installation 
-            # Try to install necessary 32-bit libraries using apt-get if available, but don't fail if it doesn't work
-            try:
-                logging.info("Attempting to install required 32-bit libraries")
-                # Use subprocess.run with check=False to avoid exceptions
-                subprocess.run([
-                    "apt-get", "update"
-                ], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            if not os.path.exists("steamcmd.sh"):
+                logging.error("Failed to extract steamcmd.sh")
+                return False
                 
-                subprocess.run([
-                    "apt-get", "install", "-y", 
-                    "lib32gcc-s1", "lib32stdc++6", "lib32z1", "libsdl2-2.0-0:i386"
-                ], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
-                
-                logging.info("Attempted to install 32-bit libraries")
-            except Exception as e:
-                logging.warning(f"Could not install 32-bit libraries: {str(e)}. This is expected in containers.")
+            # Make steamcmd.sh executable
+            os.chmod("steamcmd.sh", 0o755)
             
-            # Download and extract SteamCMD
-            steamcmd_tar_url = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz"
-            tar_path = os.path.join(steamcmd_dir, "steamcmd_linux.tar.gz")
-            
-            logging.info(f"Downloading SteamCMD for Linux from {steamcmd_tar_url}")
-            urllib.request.urlretrieve(steamcmd_tar_url, tar_path)
-            
-            logging.info(f"Extracting SteamCMD to {steamcmd_dir}")
-            with tarfile.open(tar_path, 'r:gz') as tar_ref:
-                tar_ref.extractall(steamcmd_dir)
-            
-            # Set execute permissions
-            st = os.stat(get_steamcmd_path())
-            os.chmod(get_steamcmd_path(), st.st_mode | stat.S_IEXEC)
-            
-            # Create a modified steamcmd.sh script that can work with available binaries
+            # Create our simplified script
             modify_steamcmd_script(steamcmd_dir)
             
-            # Remove the tar file
-            os.remove(tar_path)
+            # If we got here, check for the binary and fix if needed
+            linux32_dir = os.path.join(steamcmd_dir, "linux32")
+            if not os.path.exists(os.path.join(linux32_dir, "steamcmd")):
+                logging.warning("SteamCMD binary not found in linux32 directory, attempting fix...")
+                if not fix_missing_steamcmd_binary():
+                    logging.error("Failed to fix SteamCMD binary")
+                    return False
             
-            # Try to make the steamcmd file directly executable by downloading a precompiled version
-            try:
-                steamcmd_bin_url = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz"
-                bin_path = os.path.join(steamcmd_dir, "steamcmd_bin.tar.gz")
-                
-                logging.info("Downloading precompiled SteamCMD binary")
-                urllib.request.urlretrieve(steamcmd_bin_url, bin_path)
-                
-                # Create a linux32 directory if it doesn't exist
-                linux32_dir = os.path.join(steamcmd_dir, "linux32")
-                os.makedirs(linux32_dir, exist_ok=True)
-                
-                # Extract the binary
-                with tarfile.open(bin_path, 'r:gz') as tar_ref:
-                    tar_ref.extractall(steamcmd_dir)
-                
-                # Try to copy steamcmd to linux32 directory if it exists
-                if os.path.exists(os.path.join(steamcmd_dir, "steamcmd")):
-                    shutil.copy(os.path.join(steamcmd_dir, "steamcmd"), os.path.join(linux32_dir, "steamcmd"))
-                    os.chmod(os.path.join(linux32_dir, "steamcmd"), 0o755)
-                
-                os.remove(bin_path)
-                logging.info("Successfully installed precompiled SteamCMD binary")
-            except Exception as e:
-                logging.warning(f"Could not install precompiled binary: {str(e)}. Will try standard installation.")
+            logging.info("SteamCMD installed successfully")
+            return True
             
-        else:
-            logging.error(f"Unsupported OS: {platform.system()}")
-            return False
-            
-        # Run SteamCMD once to complete installation
-        logging.info("Running SteamCMD for initial setup...")
-        try:
-            if platform.system() == "Windows":
-                subprocess.run([get_steamcmd_path(), "+quit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
-            else:
-                # On Linux, run with minimal arguments to initialize
-                subprocess.run([get_steamcmd_path(), "+quit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
-        except subprocess.TimeoutExpired:
-            logging.warning("SteamCMD initialization timed out. This might be normal on first run.")
         except Exception as e:
-            logging.error(f"Error initializing SteamCMD: {str(e)}")
+            logging.error(f"Failed to download/extract SteamCMD: {str(e)}")
+            logging.info("Attempting direct binary fix as fallback...")
+            return fix_missing_steamcmd_binary()
             
-        logging.info("SteamCMD installation completed")
-        return True
-        
     except Exception as e:
-        logging.error(f"Error installing SteamCMD: {str(e)}", exc_info=True)
+        logging.error(f"Failed to install SteamCMD: {str(e)}")
         return False
 
 def modify_steamcmd_script(steamcmd_dir):
-    """Create a modified steamcmd.sh script that works with container limitations"""
+    """Create a simplified steamcmd.sh script that works in restricted environments"""
     try:
-        steamcmd_path = os.path.join(steamcmd_dir, "steamcmd.sh")
+        script_path = os.path.join(steamcmd_dir, "steamcmd.sh")
+        logging.info(f"Creating simplified steamcmd.sh script at {script_path}")
         
-        # Create a new script that works more reliably in container environments
-        # Don't use curl in the script since it might not be available
-        script_content = """#!/bin/bash
-# Simple SteamCMD wrapper for containers
-STEAMROOT="$(cd "${0%/*}" && pwd)"
-STEAMCMD=steamcmd
+        # Create the linux32 directory if it doesn't exist
+        linux32_dir = os.path.join(steamcmd_dir, "linux32")
+        os.makedirs(linux32_dir, exist_ok=True)
+        
+        # Create a very simple script that just executes the binary with all arguments
+        with open(script_path, 'w') as f:
+            f.write('''#!/bin/bash
+# Simple SteamCMD wrapper script created by SteamGames Downloader
 
-# Check if steamcmd binary exists in either linux32 or linux64 subdirectories
-if [ -f "${STEAMROOT}/linux64/steamcmd" ]; then
-    STEAMCMD="${STEAMROOT}/linux64/steamcmd"
-    PLATFORM="linux64"
-elif [ -f "${STEAMROOT}/linux32/steamcmd" ]; then
-    STEAMCMD="${STEAMROOT}/linux32/steamcmd" 
-    PLATFORM="linux32"
-# If we have a steamcmd binary in the root, copy it to linux32
-elif [ -f "${STEAMROOT}/steamcmd" ]; then
-    # Create the linux32 directory if needed
-    mkdir -p "${STEAMROOT}/linux32"
-    # Copy the binary
-    cp "${STEAMROOT}/steamcmd" "${STEAMROOT}/linux32/steamcmd"
-    # Make it executable
-    chmod +x "${STEAMROOT}/linux32/steamcmd"
-    STEAMCMD="${STEAMROOT}/linux32/steamcmd"
-    PLATFORM="linux32"
-else
-    echo "ERROR: SteamCMD not found in ${STEAMROOT}/linux32 or ${STEAMROOT}/linux64"
-    echo "Please run the Python installer again to download SteamCMD."
+# Directory where this script is located
+STEAMCMD_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+BINARY="$STEAMCMD_DIR/linux32/steamcmd"
+
+if [ ! -f "$BINARY" ]; then
+    echo "ERROR: SteamCMD binary not found at $BINARY"
+    echo "Please run the application again to reinstall SteamCMD"
     exit 1
 fi
 
-echo "Using SteamCMD: ${STEAMCMD} (${PLATFORM})"
+# Make sure it's executable
+chmod +x "$BINARY"
 
-# Run SteamCMD with the arguments passed to this script
-"${STEAMCMD}" "$@"
-exit $?
-"""
-        
-        with open(steamcmd_path, 'w') as f:
-            f.write(script_content)
+# Run SteamCMD with all arguments
+"$BINARY" "$@"
+''')
         
         # Make the script executable
-        os.chmod(steamcmd_path, os.stat(steamcmd_path).st_mode | stat.S_IEXEC)
-        logging.info(f"Created modified SteamCMD script at {steamcmd_path}")
+        os.chmod(script_path, 0o755)
+        logging.info("Successfully created simplified steamcmd.sh script")
+        return True
         
     except Exception as e:
-        logging.error(f"Error modifying steamcmd script: {str(e)}", exc_info=True)
+        logging.error(f"Failed to create simplified steamcmd.sh script: {str(e)}")
         return False
-    
-    return True
 
 def check_directories():
     """Check if necessary directories exist"""
@@ -1488,6 +1428,74 @@ def reset_settings():
         logging.error(f"Error resetting settings: {str(e)}", exc_info=True)
         return None, None, None, None, None, None, f"Error resetting settings: {str(e)}"
 
+def fix_missing_steamcmd_binary():
+    """Fix the missing steamcmd binary issue by manually extracting to the right location"""
+    try:
+        logging.info("Attempting to fix missing SteamCMD binary...")
+        
+        # Determine the SteamCMD directory
+        steamcmd_path = get_steamcmd_path()
+        steamcmd_dir = os.path.dirname(steamcmd_path)
+        
+        # Create linux32 directory
+        linux32_dir = os.path.join(steamcmd_dir, "linux32")
+        os.makedirs(linux32_dir, exist_ok=True)
+        
+        # Download SteamCMD archive
+        tar_path = os.path.join(steamcmd_dir, "steamcmd_linux.tar.gz")
+        urllib.request.urlretrieve(
+            "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz", 
+            tar_path
+        )
+        
+        # Extract directly into the linux32 directory
+        with tarfile.open(tar_path, 'r:gz') as tar_ref:
+            for member in tar_ref.getmembers():
+                # Extract only the steamcmd file
+                if member.name == "steamcmd":
+                    member.name = "steamcmd"  # Ensure correct filename
+                    tar_ref.extract(member, linux32_dir)
+                    # Make it executable
+                    bin_path = os.path.join(linux32_dir, "steamcmd")
+                    os.chmod(bin_path, 0o755)
+                    logging.info(f"Extracted steamcmd binary to {bin_path}")
+        
+        # Clean up
+        os.remove(tar_path)
+        
+        # Create a simplified steamcmd.sh script
+        with open(steamcmd_path, 'w') as f:
+            f.write("""#!/bin/bash
+# Simple SteamCMD wrapper for containers
+STEAMROOT="$(cd "${0%/*}" && pwd)"
+STEAMCMD="${STEAMROOT}/linux32/steamcmd"
+
+if [ ! -f "${STEAMCMD}" ]; then
+    echo "ERROR: SteamCMD binary not found at ${STEAMCMD}"
+    exit 1
+fi
+
+# Run SteamCMD with the arguments passed to this script
+"${STEAMCMD}" "$@"
+exit $?
+""")
+        
+        # Make script executable
+        os.chmod(steamcmd_path, 0o755)
+        
+        # Verify the binary exists
+        if os.path.exists(os.path.join(linux32_dir, "steamcmd")):
+            logging.info("Successfully fixed SteamCMD binary issue")
+            return True
+        else:
+            logging.error("Failed to create SteamCMD binary")
+            return False
+            
+    except Exception as e:
+        logging.error(f"Error fixing SteamCMD binary: {str(e)}", exc_info=True)
+        return False
+
+# Update the start_download_process function to use this fix
 def start_download_process(download_id, appid, target_dir):
     """Start the actual download process using SteamCMD"""
     try:
@@ -1505,19 +1513,15 @@ def start_download_process(download_id, appid, target_dir):
         active_downloads[download_id]["status"] = "Preparing download..."
         
         # Try to fix SteamCMD if it's not working properly
-        if platform.system() == "Linux":
-            try:
-                # Check if linux32 directory exists
-                steamcmd_dir = os.path.dirname(steamcmd_path)
-                linux32_dir = os.path.join(steamcmd_dir, "linux32")
-                linux64_dir = os.path.join(steamcmd_dir, "linux64")
-                
-                if not os.path.exists(linux32_dir) and not os.path.exists(linux64_dir):
-                    logging.warning("SteamCMD directories missing, attempting to bootstrap")
-                    # Create our custom steamcmd script
-                    modify_steamcmd_script(steamcmd_dir)
-            except Exception as e:
-                logging.error(f"Error preparing SteamCMD: {str(e)}", exc_info=True)
+        linux32_dir = os.path.join(os.path.dirname(steamcmd_path), "linux32")
+        steamcmd_binary = os.path.join(linux32_dir, "steamcmd")
+        
+        # If the steamcmd binary doesn't exist, fix it
+        if not os.path.exists(steamcmd_binary):
+            logging.warning(f"SteamCMD binary missing at {steamcmd_binary}, attempting to fix...")
+            if not fix_missing_steamcmd_binary():
+                active_downloads[download_id]["status"] = "Failed - Could not fix SteamCMD"
+                return
         
         # Build SteamCMD command
         # Format is: steamcmd +login anonymous +app_update APPID +quit
@@ -1585,7 +1589,7 @@ def start_download_process(download_id, appid, target_dir):
             
             # Try to fix SteamCMD
             logging.info("Attempting to fix SteamCMD installation")
-            install_steamcmd()
+            fix_missing_steamcmd_binary()
             return
         
         if return_code == 0:
@@ -1601,8 +1605,8 @@ def start_download_process(download_id, appid, target_dir):
             
             # Try to reinstall SteamCMD if it failed with a serious error
             if "No such file or directory" in error_details or "not found" in error_details:
-                logging.info("Attempting to reinstall SteamCMD")
-                install_steamcmd()
+                logging.info("Attempting to fix SteamCMD binary due to path error")
+                fix_missing_steamcmd_binary()
         
     except Exception as e:
         logging.error(f"Error in download process for {download_id}: {str(e)}", exc_info=True)
@@ -1819,11 +1823,21 @@ def test_and_fix_steamcmd():
         logging.info(f"Testing SteamCMD at {steamcmd_path}")
         
         if not os.path.exists(steamcmd_path):
-            logging.warning(f"SteamCMD not found, installing...")
+            logging.warning(f"SteamCMD script not found, installing...")
             if not install_steamcmd():
-                logging.warning("Standard installation failed, trying backup approach...")
-                if not backup_steamcmd_approach():
+                logging.warning("Standard installation failed, trying direct binary fix...")
+                if not fix_missing_steamcmd_binary():
                     logging.error("All installation methods failed.")
+            return
+        
+        # Check if the steamcmd binary exists
+        linux32_dir = os.path.join(os.path.dirname(steamcmd_path), "linux32")
+        linux32_binary = os.path.join(linux32_dir, "steamcmd")
+        
+        if not os.path.exists(linux32_binary):
+            logging.warning(f"SteamCMD binary not found at {linux32_binary}, installing...")
+            if not fix_missing_steamcmd_binary():
+                logging.error("Failed to fix SteamCMD binary.")
             return
         
         # Try running SteamCMD with a simple command
@@ -1842,50 +1856,34 @@ def test_and_fix_steamcmd():
                 
                 # Check specific error messages
                 if "No such file or directory" in process.stderr or "not found" in process.stderr:
-                    logging.warning("SteamCMD binary missing, reinstalling...")
-                    if not install_steamcmd():
-                        logging.warning("Standard reinstallation failed, trying backup approach...")
-                        if not backup_steamcmd_approach():
-                            logging.error("All installation methods failed.")
+                    logging.warning("SteamCMD binary missing, fixing...")
+                    if not fix_missing_steamcmd_binary():
+                        logging.error("Failed to fix SteamCMD binary.")
                     return
                 
                 # Other errors
                 logging.error(f"SteamCMD stderr: {process.stderr}")
                 
-                # Try to fix common issues
-                steamcmd_dir = os.path.dirname(steamcmd_path)
-                logging.info(f"Attempting to fix SteamCMD in {steamcmd_dir}")
-                modify_steamcmd_script(steamcmd_dir)
-                
-                # If that didn't work, try the backup approach
-                process = subprocess.run(
-                    [steamcmd_path, "+quit"], 
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.PIPE,
-                    text=True, 
-                    timeout=30
-                )
-                
-                if process.returncode != 0:
-                    logging.warning("Script modification didn't work, trying backup approach...")
-                    backup_steamcmd_approach()
+                # Try to fix
+                if not fix_missing_steamcmd_binary():
+                    logging.error("Failed to fix SteamCMD.")
             else:
                 logging.info("SteamCMD basic test successful")
                 
         except subprocess.TimeoutExpired:
-            logging.warning("SteamCMD test timed out, trying backup approach...")
-            backup_steamcmd_approach()
+            logging.warning("SteamCMD test timed out, trying direct binary fix...")
+            fix_missing_steamcmd_binary()
             
         except Exception as e:
             logging.error(f"Error testing SteamCMD: {str(e)}")
-            logging.warning("Trying backup approach due to test error...")
-            backup_steamcmd_approach()
+            logging.warning("Trying direct binary fix...")
+            fix_missing_steamcmd_binary()
     
     except Exception as e:
         logging.error(f"Error in test_and_fix_steamcmd: {str(e)}", exc_info=True)
         # Last resort attempt
         try:
-            backup_steamcmd_approach()
+            fix_missing_steamcmd_binary()
         except:
             pass
 
