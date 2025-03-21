@@ -301,71 +301,122 @@ def parse_game_input(input_str):
     return None
 
 def get_steamcmd_path():
-    """Get the path to SteamCMD based on OS"""
+    """Get the path to SteamCMD using the SteamCMD manager"""
     global STEAMCMD_PATH
     
-    if STEAMCMD_PATH:
-        return STEAMCMD_PATH
-    
-    # Check common paths in containerized environments
-    container_paths = [
-        "/app/steamcmd/steamcmd.sh",
-        "/steamcmd/steamcmd.sh",
-        "/root/steamcmd/steamcmd.sh"
-    ]
-    
-    for path in container_paths:
-        if os.path.exists(path):
-            STEAMCMD_PATH = path
-            return path
+    try:
+        # Import the SteamCMD manager module
+        import steamcmd_manager
         
-    # Default paths based on OS
-    if platform.system() == "Windows":
-        default_path = os.path.join(os.path.expanduser("~"), "steamcmd", "steamcmd.exe")
-    elif platform.system() == "Linux":
-        # Check if we're in a container by looking for indicators
-        if os.path.exists("/.dockerenv") or os.path.exists("/var/run/docker.sock"):
-            default_path = "/app/steamcmd/steamcmd.sh"
+        # Get the SteamCMD manager instance
+        manager = steamcmd_manager.get_instance()
+        
+        # Get the path from the manager
+        STEAMCMD_PATH = manager.steamcmd_path
+        return STEAMCMD_PATH
+    except ImportError:
+        logging.error("SteamCMD manager module not found, falling back to default path detection")
+        
+        # Fallback to the original path detection logic
+        if STEAMCMD_PATH:
+            return STEAMCMD_PATH
+        
+        # Check common paths in containerized environments
+        container_paths = [
+            "/app/steamcmd/steamcmd.sh",
+            "/steamcmd/steamcmd.sh",
+            "/root/steamcmd/steamcmd.sh"
+        ]
+        
+        for path in container_paths:
+            if os.path.exists(path):
+                STEAMCMD_PATH = path
+                return path
+            
+        # Default paths based on OS
+        if platform.system() == "Windows":
+            default_path = os.path.join(os.path.expanduser("~"), "steamcmd", "steamcmd.exe")
+        elif platform.system() == "Linux":
+            # Check if we're in a container by looking for indicators
+            if os.path.exists("/.dockerenv") or os.path.exists("/var/run/docker.sock"):
+                default_path = "/app/steamcmd/steamcmd.sh"
+            else:
+                default_path = os.path.join(os.path.expanduser("~"), "steamcmd", "steamcmd.sh")
+        elif platform.system() == "Darwin":  # macOS
+            default_path = os.path.join(os.path.expanduser("~"), "steamcmd", "steamcmd.sh")
         else:
             default_path = os.path.join(os.path.expanduser("~"), "steamcmd", "steamcmd.sh")
-    elif platform.system() == "Darwin":  # macOS
-        default_path = os.path.join(os.path.expanduser("~"), "steamcmd", "steamcmd.sh")
-    else:
-        default_path = os.path.join(os.path.expanduser("~"), "steamcmd", "steamcmd.sh")
-    
-    # Look for settings file
-    if os.path.exists(SETTINGS_FILE):
-        try:
-            with open(SETTINGS_FILE, 'r') as f:
-                settings = json.load(f)
-                if "steamcmd_path" in settings and settings["steamcmd_path"]:
-                    STEAMCMD_PATH = settings["steamcmd_path"]
-                    return settings["steamcmd_path"]
-        except Exception as e:
-            logging.error(f"Error reading settings file: {str(e)}", exc_info=True)
-    
-    # Ensure the directory exists
-    os.makedirs(os.path.dirname(default_path), exist_ok=True)
-    
-    # Store the path for future use
-    STEAMCMD_PATH = default_path
-    return default_path
+        
+        # Look for settings file
+        if os.path.exists(SETTINGS_FILE):
+            try:
+                with open(SETTINGS_FILE, 'r') as f:
+                    settings = json.load(f)
+                    if "steamcmd_path" in settings and settings["steamcmd_path"]:
+                        STEAMCMD_PATH = settings["steamcmd_path"]
+                        return settings["steamcmd_path"]
+            except Exception as e:
+                logging.error(f"Error reading settings file: {str(e)}", exc_info=True)
+        
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(default_path), exist_ok=True)
+        
+        # Store the path for future use
+        STEAMCMD_PATH = default_path
+        return default_path
 
 def validate_appid(appid):
-    """Validate that an AppID exists and get basic information about it."""
+    """Validate that an AppID exists and get basic information about it from Steam API."""
     try:
         logging.info(f"Validating AppID: {appid}")
-        # In a real implementation, you would check the Steam API
-        # For now, assume all numeric IDs are valid
         if not appid.isdigit():
             return False, "AppID must be a number"
         
-        # Mock response for testing
-        return True, {
-            "name": f"Game {appid}",
-            "short_description": f"This is a placeholder description for game {appid}. In a real implementation, this would be retrieved from the Steam API.",
-            "size_estimate": 1500000000  # 1.5 GB
-        }
+        # Fetch game details from Steam Store API
+        try:
+            url = f"https://store.steampowered.com/api/appdetails?appids={appid}"
+            response = requests.get(url, timeout=10)
+            
+            if response.status_code != 200:
+                logging.error(f"Steam API returned status code {response.status_code}")
+                return False, f"Steam API error: HTTP {response.status_code}"
+            
+            data = response.json()
+            
+            # Check if the API returned success for this appid
+            if not data.get(appid, {}).get('success', False):
+                return False, "Game not found on Steam"
+            
+            # Extract the game data
+            game_data = data[appid]['data']
+            
+            # Create a simplified game info object
+            game_info = {
+                "name": game_data.get('name', f"Game {appid}"),
+                "short_description": game_data.get('short_description', "No description available."),
+                "header_image": game_data.get('header_image', None),
+                "size_estimate": game_data.get('required_age', 0) * 1000000000 + 1500000000,  # Rough estimate based on required age + base size
+                "is_free": game_data.get('is_free', False),
+                "developers": game_data.get('developers', []),
+                "publishers": game_data.get('publishers', []),
+                "genres": [genre.get('description', '') for genre in game_data.get('genres', [])],
+                "release_date": game_data.get('release_date', {}).get('date', 'Unknown')
+            }
+            
+            logging.info(f"Successfully retrieved info for game {game_info['name']} (AppID: {appid})")
+            return True, game_info
+            
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Error connecting to Steam API: {str(e)}")
+            # Fallback to mock data if API fails
+            logging.warning(f"Using mock data for AppID {appid} due to API error")
+            return True, {
+                "name": f"Game {appid}",
+                "short_description": f"This is a placeholder description for game {appid}. Steam API could not be reached.",
+                "size_estimate": 1500000000,  # 1.5 GB
+                "is_free": False,
+                "header_image": None
+            }
     except Exception as e:
         logging.error(f"Error validating AppID {appid}: {str(e)}", exc_info=True)
         return False, str(e)
@@ -1226,9 +1277,37 @@ def check_steamcmd_installation():
         return f"Error checking SteamCMD: {str(e)}"
 
 def install_steamcmd():
-    """Install SteamCMD on Linux"""
+    """Install SteamCMD using the SteamCMD manager module"""
     try:
-        logging.info("Installing SteamCMD for Linux")
+        logging.info("Installing SteamCMD using SteamCMD manager")
+        
+        # Import the SteamCMD manager module
+        try:
+            import steamcmd_manager
+            
+            # Get the SteamCMD manager instance
+            manager = steamcmd_manager.get_instance()
+            
+            # Install SteamCMD
+            if manager.install():
+                logging.info("SteamCMD installed successfully")
+                return True
+            else:
+                logging.error("Failed to install SteamCMD using manager")
+                return False
+                
+        except ImportError:
+            logging.error("SteamCMD manager module not found, falling back to legacy installation")
+            return _legacy_install_steamcmd()
+            
+    except Exception as e:
+        logging.error(f"Failed to install SteamCMD: {str(e)}", exc_info=True)
+        return False
+
+def _legacy_install_steamcmd():
+    """Legacy method to install SteamCMD (fallback if manager is not available)"""
+    try:
+        logging.info("Using legacy method to install SteamCMD")
 
         # Create steamcmd directory
         steamcmd_dir = os.path.expanduser("~/steamcmd")
@@ -1501,21 +1580,66 @@ def start_download_process(download_id, appid, target_dir):
             logging.error(f"Download ID {download_id} not found in active downloads")
             return
         
+        # Update status to show we're starting
+        active_downloads[download_id]["status"] = "Preparing download..."
+        
+        # Try to use the SteamCMD manager for downloading
+        try:
+            import steamcmd_manager
+            manager = steamcmd_manager.get_instance()
+            
+            if not manager.is_installed():
+                logging.warning("SteamCMD not installed. Attempting to install...")
+                active_downloads[download_id]["status"] = "Installing SteamCMD..."
+                if not manager.install():
+                    active_downloads[download_id]["status"] = "Failed - Could not install SteamCMD"
+                    return
+            
+            # Verify SteamCMD installation
+            if not manager.verify_installation():
+                logging.warning("SteamCMD installation verification failed. Attempting to reinstall...")
+                active_downloads[download_id]["status"] = "Reinstalling SteamCMD..."
+                if not manager.install():
+                    active_downloads[download_id]["status"] = "Failed - Could not reinstall SteamCMD"
+                    return
+            
+            # Set up a thread to monitor the download progress
+            def monitor_download_thread():
+                active_downloads[download_id]["status"] = "Starting download..."
+                success, output = manager.download_game(appid, target_dir, validate=False)
+                
+                if success:
+                    logging.info(f"Download completed successfully for {download_id}")
+                    active_downloads[download_id]["progress"] = 100
+                    active_downloads[download_id]["status"] = "Completed"
+                    active_downloads[download_id]["speed"] = "0 MB/s"
+                    active_downloads[download_id]["eta"] = "Completed"
+                else:
+                    logging.error(f"Download failed for {download_id}: {output}")
+                    active_downloads[download_id]["status"] = f"Failed - {output}"
+            
+            # Start the download in a separate thread
+            download_thread = threading.Thread(target=monitor_download_thread, daemon=True)
+            download_thread.start()
+            return
+            
+        except ImportError:
+            logging.warning("SteamCMD manager not available, falling back to legacy download method")
+            # Continue with legacy download method
+        
+        # Legacy download method
         steamcmd_path = get_steamcmd_path()
         if not os.path.exists(steamcmd_path):
             logging.error(f"SteamCMD not found at {steamcmd_path}")
             active_downloads[download_id]["status"] = "Failed - SteamCMD not found"
             return
         
-        # Update status to show we're starting
-        active_downloads[download_id]["status"] = "Preparing download..."
-        
         # Try to fix SteamCMD if it's not working properly
         linux32_dir = os.path.join(os.path.dirname(steamcmd_path), "linux32")
         steamcmd_binary = os.path.join(linux32_dir, "steamcmd")
         
         # If the steamcmd binary doesn't exist, fix it
-        if not os.path.exists(steamcmd_binary):
+        if not os.path.exists(steamcmd_binary) and not platform.system() == "Windows":
             logging.warning(f"SteamCMD binary missing at {steamcmd_binary}, attempting to fix...")
             if not fix_missing_steamcmd_binary():
                 active_downloads[download_id]["status"] = "Failed - Could not fix SteamCMD"

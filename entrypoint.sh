@@ -20,6 +20,12 @@ if [ -f "/app/steamcmd/steamcmd.sh" ]; then
     chmod +x /app/steamcmd/steamcmd.sh
 fi
 
+# Check if we need to use the new init_check.py file
+if [ -f "init_check.py.new" ]; then
+    echo "Using new initialization check script..."
+    mv init_check.py.new init_check.py
+fi
+
 # Run the diagnostic check first
 echo "Running diagnostic checks..."
 if ! python3 init_check.py; then
