@@ -30,7 +30,28 @@ import stat
 
 # Define constants
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
-DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "steamapps")
+
+# Set download directory based on environment
+if os.environ.get('STEAM_DOWNLOAD_PATH'):
+    DOWNLOAD_DIR = os.environ.get('STEAM_DOWNLOAD_PATH')
+elif os.path.exists('/data/downloads'):
+    DOWNLOAD_DIR = '/data/downloads'  # Docker container volume mount
+elif os.path.exists('/app/downloads'):
+    DOWNLOAD_DIR = '/app/downloads'   # Alternate container path
+else:
+    DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "steamapps")
+
+# Ensure download directory exists with proper permissions
+try:
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+    logging.info(f"Using download directory: {DOWNLOAD_DIR}")
+except Exception as e:
+    logging.error(f"Could not create download directory {DOWNLOAD_DIR}: {str(e)}")
+    # Fallback to a directory we know we can write to
+    DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+    logging.info(f"Using fallback download directory: {DOWNLOAD_DIR}")
+
 STEAMCMD_PATH = None  # Will be set later
 
 # Global variables
@@ -284,12 +305,28 @@ def get_steamcmd_path():
     
     if STEAMCMD_PATH:
         return STEAMCMD_PATH
+    
+    # Check common paths in containerized environments
+    container_paths = [
+        "/app/steamcmd/steamcmd.sh",
+        "/steamcmd/steamcmd.sh",
+        "/root/steamcmd/steamcmd.sh"
+    ]
+    
+    for path in container_paths:
+        if os.path.exists(path):
+            STEAMCMD_PATH = path
+            return path
         
     # Default paths based on OS
     if platform.system() == "Windows":
         default_path = os.path.join(os.path.expanduser("~"), "steamcmd", "steamcmd.exe")
     elif platform.system() == "Linux":
-        default_path = os.path.join("/app", "steamcmd", "steamcmd.sh")
+        # Check if we're in a container by looking for indicators
+        if os.path.exists("/.dockerenv") or os.path.exists("/var/run/docker.sock"):
+            default_path = "/app/steamcmd/steamcmd.sh"
+        else:
+            default_path = os.path.join(os.path.expanduser("~"), "steamcmd", "steamcmd.sh")
     elif platform.system() == "Darwin":  # macOS
         default_path = os.path.join(os.path.expanduser("~"), "steamcmd", "steamcmd.sh")
     else:
@@ -301,11 +338,16 @@ def get_steamcmd_path():
             with open(SETTINGS_FILE, 'r') as f:
                 settings = json.load(f)
                 if "steamcmd_path" in settings and settings["steamcmd_path"]:
+                    STEAMCMD_PATH = settings["steamcmd_path"]
                     return settings["steamcmd_path"]
         except Exception as e:
             logging.error(f"Error reading settings file: {str(e)}", exc_info=True)
     
-    # Return default path
+    # Ensure the directory exists
+    os.makedirs(os.path.dirname(default_path), exist_ok=True)
+    
+    # Store the path for future use
+    STEAMCMD_PATH = default_path
     return default_path
 
 def validate_appid(appid):
@@ -1204,7 +1246,24 @@ def install_steamcmd():
             os.remove(zip_path)
             
         elif platform.system() == "Linux":
-            # Linux installation
+            # Linux installation 
+            # First, try to install necessary 32-bit libraries using apt-get if available
+            try:
+                logging.info("Attempting to install required 32-bit libraries")
+                subprocess.run([
+                    "apt-get", "update"
+                ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                
+                subprocess.run([
+                    "apt-get", "install", "-y", 
+                    "lib32gcc-s1", "lib32stdc++6", "lib32z1", "libsdl2-2.0-0:i386"
+                ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                
+                logging.info("Successfully installed 32-bit libraries")
+            except Exception as e:
+                logging.warning(f"Could not install 32-bit libraries: {str(e)}. SteamCMD might not work correctly.")
+            
+            # Download and extract SteamCMD
             steamcmd_tar_url = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz"
             tar_path = os.path.join(steamcmd_dir, "steamcmd_linux.tar.gz")
             
@@ -1219,6 +1278,9 @@ def install_steamcmd():
             st = os.stat(get_steamcmd_path())
             os.chmod(get_steamcmd_path(), st.st_mode | stat.S_IEXEC)
             
+            # Create a modified steamcmd.sh script that can work with available binaries
+            modify_steamcmd_script(steamcmd_dir)
+            
             # Remove the tar file
             os.remove(tar_path)
             
@@ -1231,6 +1293,7 @@ def install_steamcmd():
         if platform.system() == "Windows":
             subprocess.run([get_steamcmd_path(), "+quit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         else:
+            # On Linux, run with minimal arguments to initialize
             subprocess.run([get_steamcmd_path(), "+quit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             
         logging.info("SteamCMD installation completed successfully")
@@ -1239,6 +1302,65 @@ def install_steamcmd():
     except Exception as e:
         logging.error(f"Error installing SteamCMD: {str(e)}", exc_info=True)
         return False
+
+def modify_steamcmd_script(steamcmd_dir):
+    """Create a modified steamcmd.sh script that works with container limitations"""
+    try:
+        steamcmd_path = os.path.join(steamcmd_dir, "steamcmd.sh")
+        
+        # Create a new script that works more reliably in container environments
+        script_content = """#!/bin/bash
+# Simple SteamCMD wrapper for containers
+STEAMROOT="$(cd "${0%/*}" && pwd)"
+STEAMCMD=steamcmd
+
+if [ -f "${STEAMROOT}/linux64/steamcmd" ]; then
+    STEAMCMD="${STEAMROOT}/linux64/steamcmd"
+    PLATFORM="linux64"
+elif [ -f "${STEAMROOT}/linux32/steamcmd" ]; then
+    STEAMCMD="${STEAMROOT}/linux32/steamcmd" 
+    PLATFORM="linux32"
+else
+    echo "ERROR: SteamCMD not found in ${STEAMROOT}/linux32 or ${STEAMROOT}/linux64"
+    echo "Downloading and bootstrapping SteamCMD..."
+    mkdir -p "${STEAMROOT}/package"
+    curl -s http://media.steampowered.com/installer/steamcmd_linux.tar.gz | tar -xz -C "${STEAMROOT}/package"
+    if [ -f "${STEAMROOT}/package/linux32/steamcmd" ]; then
+        mkdir -p "${STEAMROOT}/linux32"
+        cp "${STEAMROOT}/package/linux32/steamcmd" "${STEAMROOT}/linux32/"
+        cp -r "${STEAMROOT}/package/linux32/." "${STEAMROOT}/linux32/"
+        STEAMCMD="${STEAMROOT}/linux32/steamcmd"
+        PLATFORM="linux32"
+    elif [ -f "${STEAMROOT}/package/linux64/steamcmd" ]; then
+        mkdir -p "${STEAMROOT}/linux64" 
+        cp "${STEAMROOT}/package/linux64/steamcmd" "${STEAMROOT}/linux64/"
+        cp -r "${STEAMROOT}/package/linux64/." "${STEAMROOT}/linux64/"
+        STEAMCMD="${STEAMROOT}/linux64/steamcmd"
+        PLATFORM="linux64"
+    else
+        echo "ERROR: Could not bootstrap SteamCMD"
+        exit 1
+    fi
+fi
+
+# Run SteamCMD with the arguments passed to this script
+echo "Running SteamCMD (${PLATFORM}): ${STEAMCMD}"
+"${STEAMCMD}" "$@"
+exit $?
+"""
+        
+        with open(steamcmd_path, 'w') as f:
+            f.write(script_content)
+        
+        # Make the script executable
+        os.chmod(steamcmd_path, os.stat(steamcmd_path).st_mode | stat.S_IEXEC)
+        logging.info(f"Created modified SteamCMD script at {steamcmd_path}")
+        
+    except Exception as e:
+        logging.error(f"Error modifying steamcmd script: {str(e)}", exc_info=True)
+        return False
+    
+    return True
 
 def check_directories():
     """Check if necessary directories exist"""
@@ -1350,6 +1472,24 @@ def start_download_process(download_id, appid, target_dir):
             active_downloads[download_id]["status"] = "Failed - SteamCMD not found"
             return
         
+        # Update status to show we're starting
+        active_downloads[download_id]["status"] = "Preparing download..."
+        
+        # Try to fix SteamCMD if it's not working properly
+        if platform.system() == "Linux":
+            try:
+                # Check if linux32 directory exists
+                steamcmd_dir = os.path.dirname(steamcmd_path)
+                linux32_dir = os.path.join(steamcmd_dir, "linux32")
+                linux64_dir = os.path.join(steamcmd_dir, "linux64")
+                
+                if not os.path.exists(linux32_dir) and not os.path.exists(linux64_dir):
+                    logging.warning("SteamCMD directories missing, attempting to bootstrap")
+                    # Create our custom steamcmd script
+                    modify_steamcmd_script(steamcmd_dir)
+            except Exception as e:
+                logging.error(f"Error preparing SteamCMD: {str(e)}", exc_info=True)
+        
         # Build SteamCMD command
         # Format is: steamcmd +login anonymous +app_update APPID +quit
         cmd = [
@@ -1374,10 +1514,24 @@ def start_download_process(download_id, appid, target_dir):
         
         # Store the process in active_downloads
         active_downloads[download_id]["process"] = process
-        active_downloads[download_id]["status"] = "Downloading"
+        active_downloads[download_id]["status"] = "Starting SteamCMD..."
         
-        # Process output in real-time to update progress
+        # Collect error output for diagnosis
+        stderr_output = []
+        
+        # Setup a thread to read stderr
+        def read_stderr():
+            for line in iter(process.stderr.readline, ''):
+                stderr_output.append(line.strip())
+                logging.debug(f"SteamCMD stderr: {line.strip()}")
+        
+        stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+        stderr_thread.start()
+        
+        # Process stdout in real-time to update progress
+        has_output = False
         for line in iter(process.stdout.readline, ''):
+            has_output = True
             if download_id not in active_downloads:
                 # Download was cancelled
                 process.terminate()
@@ -1385,9 +1539,25 @@ def start_download_process(download_id, appid, target_dir):
                 
             # Parse SteamCMD output to update progress
             update_download_progress(download_id, line)
-            
+        
         # Wait for process to complete
         return_code = process.wait()
+        
+        # If we didn't get any output, something went wrong
+        if not has_output:
+            logging.error(f"SteamCMD produced no output for {download_id}")
+            active_downloads[download_id]["status"] = "Failed - SteamCMD produced no output"
+            
+            # Try to diagnose what went wrong
+            if stderr_output:
+                logging.error(f"SteamCMD stderr: {stderr_output}")
+                error_msg = '\n'.join(stderr_output[:5])
+                active_downloads[download_id]["status"] = f"Failed - {error_msg}"
+            
+            # Try to fix SteamCMD
+            logging.info("Attempting to fix SteamCMD installation")
+            install_steamcmd()
+            return
         
         if return_code == 0:
             logging.info(f"Download completed successfully for {download_id}")
@@ -1396,9 +1566,14 @@ def start_download_process(download_id, appid, target_dir):
             active_downloads[download_id]["speed"] = "0 MB/s"
             active_downloads[download_id]["eta"] = "Completed"
         else:
-            error_output = process.stderr.read()
-            logging.error(f"Download failed for {download_id}: {error_output}")
-            active_downloads[download_id]["status"] = f"Failed - Error code: {return_code}"
+            error_details = '\n'.join(stderr_output[:5]) if stderr_output else f"Error code: {return_code}"
+            logging.error(f"Download failed for {download_id}: {error_details}")
+            active_downloads[download_id]["status"] = f"Failed - {error_details}"
+            
+            # Try to reinstall SteamCMD if it failed with a serious error
+            if "No such file or directory" in error_details or "not found" in error_details:
+                logging.info("Attempting to reinstall SteamCMD")
+                install_steamcmd()
         
     except Exception as e:
         logging.error(f"Error in download process for {download_id}: {str(e)}", exc_info=True)
@@ -1494,19 +1669,34 @@ def start_monitoring_thread():
                     downloads_to_remove = []
                     for download_id, download_info in active_downloads.items():
                         # Check if the process is still running
-                        if download_info.get("process") and download_info["process"].poll() is not None:
-                            # Process has ended, check if it was successful
-                            if download_info["process"].returncode == 0:
-                                download_info["progress"] = 100
-                                download_info["status"] = "Completed"
-                                download_info["speed"] = "0 MB/s"
-                                download_info["eta"] = "Completed"
-                                logging.info(f"Download {download_id} completed successfully")
-                                downloads_to_remove.append(download_id)
-                            else:
-                                download_info["status"] = f"Failed - Error code: {download_info['process'].returncode}"
-                                logging.error(f"Download {download_id} failed with code {download_info['process'].returncode}")
-                                downloads_to_remove.append(download_id)
+                        if download_info.get("process"):
+                            process = download_info["process"]
+                            if process.poll() is not None:
+                                # Process has ended, check if it was successful
+                                returncode = process.returncode
+                                if returncode == 0:
+                                    download_info["progress"] = 100
+                                    download_info["status"] = "Completed"
+                                    download_info["speed"] = "0 MB/s"
+                                    download_info["eta"] = "Completed"
+                                    logging.info(f"Download {download_id} completed successfully")
+                                    downloads_to_remove.append(download_id)
+                                else:
+                                    # Try to get error output if available
+                                    error_output = ""
+                                    try:
+                                        error_output = process.stderr.read()
+                                    except:
+                                        pass
+                                        
+                                    if error_output:
+                                        logging.error(f"Download {download_id} failed with output: {error_output}")
+                                        download_info["status"] = f"Failed - {error_output[:100]}"
+                                    else:
+                                        logging.error(f"Download {download_id} failed with code {returncode}")
+                                        download_info["status"] = f"Failed - Error code: {returncode}"
+                                        
+                                    downloads_to_remove.append(download_id)
                         
                         # Check if the download has been running for too long (10 minutes without progress)
                         elif download_info.get("status") == "Starting" and time.time() - download_info.get("start_time", 0) > 600:
@@ -1593,11 +1783,66 @@ def queue_handler(input_text, username, password, guard_code, anonymous, validat
         logging.error(f"Queue error: {str(e)}")
         return f"Error adding to queue: {str(e)}"
 
+def test_and_fix_steamcmd():
+    """Test SteamCMD and fix it if broken"""
+    try:
+        steamcmd_path = get_steamcmd_path()
+        logging.info(f"Testing SteamCMD at {steamcmd_path}")
+        
+        if not os.path.exists(steamcmd_path):
+            logging.warning(f"SteamCMD not found, installing...")
+            install_steamcmd()
+            return
+        
+        # Try running SteamCMD with a simple command
+        try:
+            logging.info("Testing SteamCMD with a simple command...")
+            process = subprocess.run(
+                [steamcmd_path, "+quit"], 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE,
+                text=True, 
+                timeout=30
+            )
+            
+            if process.returncode != 0:
+                logging.warning(f"SteamCMD test failed with code {process.returncode}")
+                
+                # Check specific error messages
+                if "No such file or directory" in process.stderr or "not found" in process.stderr:
+                    logging.warning("SteamCMD binary missing, reinstalling...")
+                    install_steamcmd()
+                    return
+                
+                # Other errors
+                logging.error(f"SteamCMD stderr: {process.stderr}")
+                
+                # Try to fix common issues
+                steamcmd_dir = os.path.dirname(steamcmd_path)
+                logging.info(f"Attempting to fix SteamCMD in {steamcmd_dir}")
+                modify_steamcmd_script(steamcmd_dir)
+            else:
+                logging.info("SteamCMD basic test successful")
+                
+        except subprocess.TimeoutExpired:
+            logging.warning("SteamCMD test timed out, reinstalling...")
+            install_steamcmd()
+            
+        except Exception as e:
+            logging.error(f"Error testing SteamCMD: {str(e)}")
+            install_steamcmd()
+    
+    except Exception as e:
+        logging.error(f"Error in test_and_fix_steamcmd: {str(e)}", exc_info=True)
+
 # Main application entry point
 if __name__ == "__main__":
     print("="*50)
     print("Starting Steam Games Downloader - FULL VERSION")
     print("="*50)
+    
+    # Test and fix SteamCMD at startup
+    test_and_fix_steamcmd()
     
     # Initialize background threads and services
     download_queue_thread = threading.Thread(target=process_download_queue, daemon=True)
