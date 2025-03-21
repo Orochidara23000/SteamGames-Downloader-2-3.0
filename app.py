@@ -38,8 +38,9 @@ if __name__ == "__main__":
         logger.error(f"Error starting download queue thread: {str(e)}")
     
     # Create the interface directly instead of importing main.py
-    with gr.Blocks(title="Steam Games Downloader") as app:
+    with gr.Blocks(title="Steam Games Downloader - DEMO MODE") as app:
         gr.Markdown("# Steam Games Downloader")
+        gr.Markdown("### Running in DEMO MODE - Downloads are simulated")
         
         with gr.Tabs():
             download_tab = create_download_games_tab()

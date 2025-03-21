@@ -349,14 +349,22 @@ def start_download(username, password, guard_code, anonymous, appid, validate_do
             error_msg = f"Error: SteamCMD not found at {steamcmd_path}"
             logging.error(error_msg)
             
+            # For demo purposes, start a simulated download instead
+            logging.info("Starting SIMULATED download for demo purposes...")
+            
+            # Start a simulation thread
+            simulation_thread = threading.Thread(
+                target=simulate_download,
+                args=(download_id, appid),
+                daemon=True
+            )
+            simulation_thread.start()
+            
             with queue_lock:
                 if download_id in active_downloads:
-                    active_downloads[download_id]["status"] = "Failed - SteamCMD not found"
-                    # Keep the failed download visible for a while
-                    threading.Timer(30, lambda: remove_completed_download(download_id)).start()
+                    active_downloads[download_id]["status"] = "Simulated Download (DEMO MODE)"
             
-            process_download_queue()
-            return
+            return download_id
         
         # Build command arguments
         cmd_args = [steamcmd_path]
@@ -408,40 +416,104 @@ def start_download(username, password, guard_code, anonymous, appid, validate_do
             with queue_lock:
                 if download_id in active_downloads:
                     active_downloads[download_id]["process"] = process
-                    active_downloads[download_id]["status"] = "Downloading"
-                    logging.info(f"Updated active_downloads with process info")
             
-            # Process output and monitor progress in a separate thread
-            logging.info("Starting monitoring thread...")
+            # Start a thread to monitor the process output
             monitor_thread = threading.Thread(
                 target=monitor_download,
-                args=(download_id, process)
+                args=(download_id, process),
+                daemon=True
             )
-            monitor_thread.daemon = True
             monitor_thread.start()
-            logging.info(f"Monitoring thread started for download {download_id}")
+            
+            return download_id
             
         except Exception as e:
-            logging.error(f"Error starting SteamCMD process: {str(e)}", exc_info=True)
+            logging.error(f"Error starting download process: {str(e)}", exc_info=True)
             
             with queue_lock:
                 if download_id in active_downloads:
-                    active_downloads[download_id]["status"] = f"Failed to start SteamCMD: {str(e)}"
+                    active_downloads[download_id]["status"] = f"Failed - {str(e)}"
                     # Keep the failed download visible for a while
                     threading.Timer(30, lambda: remove_completed_download(download_id)).start()
             
             process_download_queue()
-        
+            return None
+            
     except Exception as e:
-        logging.error(f"Error in start_download for {download_id}: {str(e)}", exc_info=True)
+        logging.error(f"Error starting download: {str(e)}", exc_info=True)
+        return None
+
+def simulate_download(download_id, appid):
+    """Simulate a download for demo purposes when SteamCMD isn't available"""
+    logging.info(f"Starting simulated download for {download_id}")
+    
+    # Simulate a game of 2-5 GB
+    import random
+    total_size_mb = random.randint(2000, 5000)
+    total_size_bytes = total_size_mb * 1024 * 1024
+    
+    # Update the active download entry
+    with queue_lock:
+        if download_id in active_downloads:
+            active_downloads[download_id]["total_size"] = f"{total_size_mb} MB"
+    
+    # Simulate download progress over time
+    downloaded = 0
+    start_time = time.time()
+    
+    # Simulate 5-10 minutes of download time, but faster for demo purposes
+    total_seconds = random.randint(30, 60)  # 30-60 seconds for demo
+    
+    while downloaded < total_size_bytes:
+        elapsed = time.time() - start_time
+        if elapsed >= total_seconds:
+            downloaded = total_size_bytes  # Complete the download
+        else:
+            # Calculate progress based on elapsed time
+            progress_pct = elapsed / total_seconds
+            downloaded = int(total_size_bytes * progress_pct)
         
+        # Calculate speed (simulate 5-20 MB/s)
+        speed = downloaded / (elapsed if elapsed > 0 else 1)
+        
+        # Randomize a bit to make it look realistic
+        speed = speed * (0.8 + 0.4 * random.random())
+        
+        # Update the active download entry
         with queue_lock:
             if download_id in active_downloads:
-                active_downloads[download_id]["status"] = f"Failed - {str(e)}"
-                # Keep the failed download visible for a while
-                threading.Timer(30, lambda: remove_completed_download(download_id)).start()
+                active_downloads[download_id]["progress"] = round(downloaded / total_size_bytes * 100, 1)
+                active_downloads[download_id]["size_downloaded"] = f"{downloaded / (1024 * 1024):.1f} MB"
+                active_downloads[download_id]["speed"] = f"{speed / (1024 * 1024):.1f} MB/s"
+                
+                # Calculate ETA
+                if speed > 0:
+                    eta_seconds = (total_size_bytes - downloaded) / speed
+                    if eta_seconds < 60:
+                        eta_str = f"{int(eta_seconds)} sec"
+                    else:
+                        eta_str = f"{int(eta_seconds / 60)} min {int(eta_seconds % 60)} sec"
+                    active_downloads[download_id]["eta"] = eta_str
+                    
+                # Update status
+                active_downloads[download_id]["status"] = f"Downloading (DEMO MODE) - {active_downloads[download_id]['progress']}%"
+            else:
+                # Download was removed, exit the simulation
+                return
         
-        process_download_queue()
+        # Sleep for a short period
+        time.sleep(1)
+    
+    # Download completed
+    with queue_lock:
+        if download_id in active_downloads:
+            active_downloads[download_id]["progress"] = 100.0
+            active_downloads[download_id]["status"] = "Completed (DEMO MODE)"
+            active_downloads[download_id]["eta"] = "Complete"
+            
+            # Move to history after a delay
+            logging.info(f"Simulated download completed for {download_id}")
+            threading.Timer(30, lambda: remove_completed_download(download_id)).start()
 
 def monitor_download(download_id, process):
     """Monitor the download process and update progress."""
