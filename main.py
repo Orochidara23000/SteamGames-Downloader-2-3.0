@@ -1290,11 +1290,11 @@ if __name__ == "__main__":
             
         print("Full interface created, launching application...")
     
-    # Launch the application with simpler parameters to ensure compatibility
+    # Launch the application
     app.queue().launch(
-        server_port=int(os.environ.get("PORT", 7862)),
+        server_port=int(os.environ.get("PORT", 8080)),  # Use standard port 8080 by default
         server_name="0.0.0.0",  # Bind to all interfaces
-        share=True,
+        share=True,  # Always enable sharing
         prevent_thread_lock=False  # We'll handle the blocking ourselves
     )
     
@@ -1306,9 +1306,12 @@ if __name__ == "__main__":
     
     # Keep the main process running until interrupted
     try:
+        print("Application will remain running until interrupted.")
         while True:
             time.sleep(10)  # Sleep for 10 seconds at a time
-            # You could add periodic health checks or maintenance tasks here
+            # Log a heartbeat message every minute
+            print(".", end="", flush=True)
+            
     except KeyboardInterrupt:
-        print("Application shutdown requested, exiting...")
+        print("\nApplication shutdown requested, exiting...")
         # Perform any necessary cleanup here
