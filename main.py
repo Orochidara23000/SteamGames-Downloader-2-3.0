@@ -1291,11 +1291,11 @@ if __name__ == "__main__":
         print("Full interface created, launching application...")
     
     # Launch the application with simpler parameters to ensure compatibility
-    app.launch(
+    app.queue().launch(
         server_port=int(os.environ.get("PORT", 7862)),
         server_name="0.0.0.0",  # Bind to all interfaces
         share=True,
-        prevent_thread_lock=True  # Keep the app running in a container
+        prevent_thread_lock=False  # We'll handle the blocking ourselves
     )
     
     # Print confirmation after launch
@@ -1303,3 +1303,12 @@ if __name__ == "__main__":
     print("Application running. Access URLs listed above.")
     print("Sharing is ENABLED - look for the 'Running on public URL:' link above")
     print("="*50)
+    
+    # Keep the main process running until interrupted
+    try:
+        while True:
+            time.sleep(10)  # Sleep for 10 seconds at a time
+            # You could add periodic health checks or maintenance tasks here
+    except KeyboardInterrupt:
+        print("Application shutdown requested, exiting...")
+        # Perform any necessary cleanup here
