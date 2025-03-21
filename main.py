@@ -1295,8 +1295,7 @@ if __name__ == "__main__":
         server_port=int(os.environ.get("PORT", 7862)),
         server_name="0.0.0.0",
         share=True,  # Always enable sharing
-        debug=os.environ.get("DEBUG", "False").lower() == "true",
-        share_callback=update_share_url  # Capture and display the share URL
+        debug=os.environ.get("DEBUG", "False").lower() == "true"
     )
     
     # Print confirmation after launch
