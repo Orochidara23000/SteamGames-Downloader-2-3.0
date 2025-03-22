@@ -5,7 +5,9 @@ import argparse
 from pathlib import Path
 
 # Add project root to path to ensure modules are found
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
+sys.path.insert(0, current_dir)
 
 # Set up logging
 def setup_logging(log_level=logging.INFO):
@@ -79,18 +81,26 @@ def main():
     initialize_directories()
     logger.info("Directories initialized")
     
-    # Initialize the UI
-    from ui.main_ui import create_ui
-    app = create_ui()
-    
-    # Launch the application
-    logger.info(f"Launching UI on {args.host}:{args.port}")
-    app.launch(
-        server_name=args.host,
-        server_port=args.port,
-        share=args.share,
-        prevent_thread_lock=False
-    )
+    try:
+        # Import UI components after path is set
+        from ui.main_ui import create_ui
+        app = create_ui()
+        
+        # Launch the application
+        logger.info(f"Launching UI on {args.host}:{args.port}")
+        app.launch(
+            server_name=args.host,
+            server_port=args.port,
+            share=args.share,
+            prevent_thread_lock=False
+        )
+    except ImportError as e:
+        logger.error(f"Import error: {str(e)}")
+        logger.error("Make sure the project structure is correct with 'ui', 'modules', and 'utils' directories")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Error starting application: {str(e)}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
