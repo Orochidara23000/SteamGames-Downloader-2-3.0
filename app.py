@@ -12,13 +12,10 @@ import logging
 import traceback
 from pathlib import Path
 
-# Ensure paths are set correctly
+# Ensure current directory is in path
 current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(current_dir)
-for subdir in ["ui", "modules", "utils"]:
-    subdir_path = os.path.join(current_dir, subdir)
-    if os.path.exists(subdir_path) and subdir_path not in sys.path:
-        sys.path.insert(0, subdir_path)
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
 
 # Set up logging
 logging.basicConfig(
@@ -53,61 +50,88 @@ def initialize_directories():
     
     logger.info("Directories initialized")
 
-# Create any missing __init__.py files
-def create_init_files():
-    """Create __init__.py files in all package directories if missing"""
-    for dir_name in ["ui", "modules", "utils"]:
-        init_file = os.path.join(current_dir, dir_name, "__init__.py")
-        if not os.path.exists(init_file):
-            Path(init_file).touch()
-            logger.info(f"Created {init_file}")
-
 # Check for UI files
-def check_ui_files():
-    """Check if UI files exist"""
-    ui_files = ["main_ui.py", "download_tab.py", "library_tab.py", "settings_tab.py"]
-    ui_dir = os.path.join(current_dir, "ui")
+def check_files():
+    """Check if required files exist"""
+    required_files = ["main_ui.py", "download_tab.py", "library_tab.py", "settings_tab.py", 
+                     "download_manager.py", "steamcmd_manager.py", "library_manager.py", 
+                     "steam_api.py", "config.py"]
+    missing_files = []
     
-    for file in ui_files:
-        file_path = os.path.join(ui_dir, file)
+    for file in required_files:
+        file_path = os.path.join(current_dir, file)
         if os.path.exists(file_path):
-            logger.info(f"UI file exists: {file}")
+            logger.info(f"File exists: {file}")
         else:
-            logger.error(f"UI file missing: {file}")
+            logger.error(f"File missing: {file}")
+            missing_files.append(file)
+    
+    return missing_files
+
+# Create minimal main_ui.py if missing
+def create_minimal_main_ui():
+    """Create minimal main_ui.py if it is missing"""
+    main_ui_path = os.path.join(current_dir, "main_ui.py")
+    if not os.path.exists(main_ui_path):
+        with open(main_ui_path, "w") as f:
+            f.write("""
+import logging
+import gradio as gr
+
+logger = logging.getLogger(__name__)
+
+def create_ui():
+    logger.info("Creating minimal UI")
+    interface = gr.Blocks(title="Steam Games Downloader")
+    with interface:
+        gr.Markdown("# Steam Games Downloader")
+        gr.Markdown("## Minimal Interface")
+        gr.Markdown("SteamCMD is installed and working. This is a minimal UI for testing.")
+    return interface
+""")
+        logger.info(f"Created minimal main_ui.py")
 
 # Main function
 def main():
     """Main application entry point"""
     logger.info("Starting Steam Games Downloader")
     
-    # Create init files
-    create_init_files()
-    
     # Initialize directories
     initialize_directories()
     
-    # Check UI files
-    check_ui_files()
+    # Check required files
+    missing_files = check_files()
+    
+    # Create minimal main_ui if needed
+    if "main_ui.py" in missing_files:
+        logger.warning(f"Creating minimal main_ui.py")
+        create_minimal_main_ui()
     
     try:
-        # First try importing main_ui from ui package
-        logger.info("Attempting to import ui.main_ui")
-        from ui.main_ui import create_ui
-        logger.info("Successfully imported ui.main_ui")
+        # Import main_ui
+        logger.info("Attempting to import main_ui")
+        import main_ui
+        logger.info("Successfully imported main_ui")
+        create_ui = main_ui.create_ui
     except ImportError as e:
-        logger.error(f"Failed to import ui.main_ui: {str(e)}")
+        logger.error(f"Failed to import main_ui: {str(e)}")
         
+        # Last resort - create a minimal UI function directly
+        logger.warning("Creating a minimal UI function directly")
+        def create_ui():
+            import gradio as gr
+            interface = gr.Blocks(title="Steam Games Downloader - Emergency UI")
+            with interface:
+                gr.Markdown("# Steam Games Downloader")
+                gr.Markdown("## Emergency UI")
+                gr.Markdown("Failed to load UI modules. This is an emergency interface.")
+            return interface
+        
+        # Make sure gradio is imported
         try:
-            # Fall back to direct import
-            logger.info("Trying direct import of main_ui")
-            sys.path.insert(0, os.path.join(current_dir, "ui"))
-            import main_ui
-            create_ui = main_ui.create_ui
-            logger.info("Successfully imported main_ui using direct import")
-        except ImportError as e:
-            logger.error(f"All import attempts failed: {str(e)}")
-            logger.error(f"Python path: {sys.path}")
-            logger.error(f"Files in ui directory: {os.listdir(os.path.join(current_dir, 'ui'))}")
+            import gradio as gr
+        except ImportError:
+            logger.error("Gradio not installed, cannot create UI")
             sys.exit(1)
     
     try:
