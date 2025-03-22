@@ -109,6 +109,52 @@ check_dependencies() {
     fi
 }
 
+# Install SteamCMD function
+install_steamcmd() {
+    echo "⚠️ SteamCMD not found, will attempt to install it"
+    
+    # Check if we have the fix script
+    if [ -f "$APP_DIR/fix_steamcmd.sh" ]; then
+        echo "Using fix_steamcmd.sh script..."
+        bash "$APP_DIR/fix_steamcmd.sh"
+    else
+        # Manual SteamCMD installation
+        mkdir -p /root/steamcmd
+        cd /root/steamcmd
+        
+        echo "Downloading SteamCMD..."
+        if command -v curl &> /dev/null; then
+            curl -sqL "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" | tar zxvf -
+        else
+            wget -q "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" -O steamcmd_linux.tar.gz
+            tar -xzvf steamcmd_linux.tar.gz
+            rm steamcmd_linux.tar.gz
+        fi
+        
+        # Make executable
+        chmod +x steamcmd.sh
+        
+        # Create linux32 directory if needed
+        mkdir -p linux32
+        
+        # Copy steamcmd to linux32 if it exists
+        if [ -f "steamcmd" ] && [ ! -f "linux32/steamcmd" ]; then
+            cp steamcmd linux32/
+            chmod +x linux32/steamcmd
+        fi
+        
+        # Return to app directory
+        cd "$APP_DIR"
+    fi
+    
+    if [ -e "/root/steamcmd/steamcmd.sh" ]; then
+        echo "✅ SteamCMD installed successfully"
+    else
+        echo "❌ Failed to install SteamCMD"
+        exit 1
+    fi
+}
+
 # Run dependency checks
 check_dependencies
 
@@ -116,20 +162,27 @@ check_dependencies
 if [ -e "/root/steamcmd/steamcmd.sh" ] && [ -e "/root/steamcmd/linux32/steamcmd" ]; then
     echo "✅ SteamCMD is installed"
 else
-    echo "⚠️ SteamCMD not found, will attempt to install it"
-    # Create script to install SteamCMD
-    python3 -c "from modules.steamcmd_manager import SteamCMD; SteamCMD().install_steamcmd()" || echo "Failed to install SteamCMD via Python module"
-    if [ -e "/root/steamcmd/steamcmd.sh" ]; then
-        echo "✅ SteamCMD installed successfully"
-    else
-        echo "❌ Failed to install SteamCMD"
-        exit 1
-    fi
+    install_steamcmd
 fi
 
 # Test SteamCMD
 echo "Testing SteamCMD..."
-/root/steamcmd/steamcmd.sh +quit
+if ! /root/steamcmd/steamcmd.sh +quit; then
+    echo "⚠️ SteamCMD test failed, attempting to fix installation..."
+    if [ -f "$APP_DIR/fix_steamcmd.sh" ]; then
+        bash "$APP_DIR/fix_steamcmd.sh"
+    else
+        install_steamcmd
+    fi
+    
+    # Test again
+    echo "Testing SteamCMD again..."
+    if /root/steamcmd/steamcmd.sh +quit; then
+        echo "✅ SteamCMD is now working correctly"
+    else
+        echo "⚠️ SteamCMD still not working properly, but continuing anyway"
+    fi
+fi
 
 # Decide which script to run
 if [ -f "app.py" ]; then
