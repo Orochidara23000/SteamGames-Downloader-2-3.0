@@ -49,7 +49,10 @@ fi
 
 # Start the application and keep it running in the foreground
 echo "Starting main application..."
-if [ -f "run.py" ]; then
+if [ -f "simple.py" ]; then
+    echo "Using simple launcher script..."
+    exec python3 simple.py
+elif [ -f "run.py" ]; then
     echo "Using wrapper script run.py..."
     exec python3 run.py
 else
