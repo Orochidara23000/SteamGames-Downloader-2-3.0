@@ -250,30 +250,28 @@ class SteamAPI:
             return []
     
     def clear_cache(self, app_id=None):
-        """Clear the API response cache
-        
-        Args:
-            app_id: Optional app ID to clear specific cache, or None to clear all
-        """
-        try:
-            if app_id:
-                # Clear specific app cache
-                cache_file = self.cache_dir / f"app_{app_id}.json"
-                if cache_file.exists():
+        """Clear API cache"""
+        if app_id:
+            # Clear specific app cache
+            cache_file = self.cache_dir / f"app_{app_id}.json"
+            if cache_file.exists():
+                try:
                     os.remove(cache_file)
                     logger.info(f"Cleared cache for AppID {app_id}")
-                return True
-            else:
-                # Clear all cache files
-                count = 0
+                    return True
+                except Exception as e:
+                    logger.error(f"Error clearing cache for AppID {app_id}: {str(e)}")
+                    return False
+        else:
+            # Clear all cache
+            try:
                 for file in self.cache_dir.glob("*.json"):
                     os.remove(file)
-                    count += 1
-                logger.info(f"Cleared {count} cache files")
+                logger.info("Cleared all API cache")
                 return True
-        except Exception as e:
-            logger.error(f"Error clearing cache: {str(e)}")
-            return False
+            except Exception as e:
+                logger.error(f"Error clearing API cache: {str(e)}")
+                return False
 
 # Singleton instance
 _instance = None
@@ -283,8 +281,7 @@ def get_steam_api(api_key=None):
     global _instance
     if _instance is None:
         _instance = SteamAPI(api_key)
-    elif api_key is not None and _instance.api_key is None:
-        # Update API key if it was previously not set
+    elif api_key and _instance.api_key is None:
         _instance.api_key = api_key
     return _instance
 
@@ -293,11 +290,19 @@ if __name__ == "__main__":
     # Configure logging
     logging.basicConfig(level=logging.INFO)
     
-    # Get API instance
+    # Get SteamAPI instance
     api = get_steam_api()
     
+    # Test app details
+    print("Getting app details for CS:GO (730)...")
+    app_details = api.get_app_details(730)
+    if app_details:
+        print(f"Name: {app_details.get('name')}")
+        print(f"Type: {app_details.get('type')}")
+        print(f"Description: {app_details.get('short_description')[:100]}...")
+    
     # Test search
-    results = api.search_games("half-life", limit=5)
-    print(f"Found {len(results)} games:")
-    for game in results:
-        print(f"  {game['name']} (AppID: {game['id']})") 
+    print("\nSearching for 'half-life'...")
+    search_results = api.search_games("half-life", limit=5)
+    for i, game in enumerate(search_results, 1):
+        print(f"{i}. {game.get('name')} (AppID: {game.get('id')})") 

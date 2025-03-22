@@ -36,7 +36,7 @@ class DownloadTab:
                 
                 try:
                     # Import download manager
-                    from download_manager import get_download_manager
+                    from modules.download_manager import get_download_manager
                     dm = get_download_manager()
                     
                     # Add download

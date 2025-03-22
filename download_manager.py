@@ -26,7 +26,7 @@ class DownloadManager:
         try:
             # Import config lazily to avoid circular imports
             if config is None:
-                from config import get_config
+                from utils.config import get_config
                 self.config = get_config()
             else:
                 self.config = config
@@ -448,110 +448,100 @@ class DownloadManager:
             try:
                 subprocess.run(
                     ["curl", "-sqL", "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz", "-o", tar_path],
-                    check=True
-                )
-            except:
-                try:
-                    subprocess.run(
-                        ["wget", "-q", "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz", "-O", tar_path],
-                        check=True
-                    )
-                except:
-                    logger.error("Failed to download SteamCMD")
-                    return False
-            
-            # Extract SteamCMD
-            logger.info(f"Extracting SteamCMD to {steamcmd_dir}")
-            import tarfile
-            try:
-                with tarfile.open(tar_path) as tar:
-                    tar.extractall(path=steamcmd_dir)
-                logger.info("SteamCMD extracted successfully")
-            except Exception as e:
-                logger.error(f"Failed to extract SteamCMD: {str(e)}")
-                return False
-            
-            # Make steamcmd.sh executable
-            steamcmd_script = os.path.join(steamcmd_dir, "steamcmd.sh")
-            try:
-                os.chmod(steamcmd_script, 0o755)
-                logger.info("Made steamcmd.sh executable")
-            except:
-                logger.warning("Failed to make steamcmd.sh executable")
-            
-            # Run SteamCMD once to update
-            logger.info("Running SteamCMD to complete setup")
-            try:
-                subprocess.run(
-                    [steamcmd_script, "+quit"],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
                     check=False
                 )
-                logger.info("SteamCMD setup completed")
-                return True
-            except Exception as e:
-                logger.error(f"Failed to run SteamCMD: {str(e)}")
+            except:
+                try:
+                    subprocess.run(
+                        ["wget", "-q", "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz", "-O", tar_path],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        check=False
+                    )
+                except:
+                    logger.error("Failed to download SteamCMD, both curl and wget failed")
+                    return False
+            
+            # Extract archive
+            logger.info(f"Extracting SteamCMD to {steamcmd_dir}")
+            try:
+                subprocess.run(
+                    ["tar", "-xzf", tar_path, "-C", steamcmd_dir],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=False
+                )
+            except:
+                logger.error("Failed to extract SteamCMD archive")
                 return False
+            
+            # Make script executable
+            steamcmd_script = os.path.join(steamcmd_dir, "steamcmd.sh")
+            os.chmod(steamcmd_script, 0o755)
+            
+            # Copy steamcmd binary to linux32 directory
+            steam_bin = os.path.join(steamcmd_dir, "steamcmd")
+            linux32_bin = os.path.join(linux32_dir, "steamcmd")
+            
+            if os.path.exists(steam_bin):
+                import shutil
+                shutil.copy2(steam_bin, linux32_bin)
+                os.chmod(linux32_bin, 0o755)
+                logger.info(f"Copied SteamCMD binary to {linux32_bin}")
+            
+            logger.info("SteamCMD installation fixed")
+            return True
             
         except Exception as e:
             logger.error(f"Error fixing SteamCMD: {str(e)}")
             return False
     
-    def cleanup(self):
-        """Cleanup resources when manager is destroyed"""
-        logger.info("Cleaning up download manager resources")
-        self.should_stop = True
-        
-        # Cancel all active downloads
-        with self.download_lock:
-            for dl_id, process in self.active_downloads.items():
-                try:
-                    process.terminate()
-                    logger.info(f"Terminated download process for {dl_id}")
-                except:
-                    pass
+    def shutdown(self):
+        """Shut down the download manager"""
+        try:
+            logger.info("Shutting down Download Manager")
             
-            self.active_downloads = {}
-            self._save_downloads()
-        
-        # Wait for background thread to stop
-        if self.download_thread.is_alive():
-            self.download_thread.join(timeout=2)
+            # Signal thread to stop
+            self.should_stop = True
+            
+            # Cancel all active downloads
+            with self.download_lock:
+                for dl_id, process in list(self.active_downloads.items()):
+                    try:
+                        process.terminate()
+                        logger.info(f"Terminated download process for {dl_id}")
+                    except:
+                        logger.warning(f"Failed to terminate download process for {dl_id}")
+                
+                # Update status for active downloads
+                for dl_id in self.active_downloads:
+                    if dl_id in self.downloads:
+                        self.downloads[dl_id]["status"] = "cancelled"
+                        self.downloads[dl_id]["end_time"] = datetime.now().isoformat()
+                
+                self.active_downloads.clear()
+                self._save_downloads()
+            
+            # Wait for thread to finish
             if self.download_thread.is_alive():
-                logger.warning("Background thread did not stop cleanly")
+                self.download_thread.join(timeout=2)
+            
+            logger.info("Download Manager shut down successfully")
+        
+        except Exception as e:
+            logger.error(f"Error shutting down Download Manager: {str(e)}")
 
 # Singleton instance
 _instance = None
 
-def get_download_manager(config=None):
+def get_download_manager():
     """Get the singleton download manager instance"""
     global _instance
     if _instance is None:
-        _instance = DownloadManager(config)
-    return _instance
-
-# For direct testing
-if __name__ == "__main__":
-    # Configure logging
-    logging.basicConfig(level=logging.INFO)
-    
-    # Get download manager
-    dm = get_download_manager()
-    
-    # Add a test download
-    dl_id = dm.add_download("730", "Counter-Strike: Global Offensive")
-    
-    # Print all downloads
-    downloads = dm.get_downloads()
-    print(f"Current downloads: {len(downloads)}")
-    for dl_id, dl_info in downloads.items():
-        print(f"  {dl_info['app_name']} (AppID: {dl_info['app_id']}) - Status: {dl_info['status']}")
-    
-    # Sleep to allow download to start
-    import time
-    time.sleep(5)
-    
-    # Cleanup and exit
-    dm.cleanup() 
+        _instance = DownloadManager()
+    return _instance 

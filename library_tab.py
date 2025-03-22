@@ -7,8 +7,8 @@ import gradio as gr
 import pandas as pd
 
 # Import local modules
-from config import get_config
-from library_manager import get_library_manager
+from utils.config import get_config
+from modules.library_manager import get_library_manager
 
 # Configure logger
 logger = logging.getLogger(__name__)

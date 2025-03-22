@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-SteamCMD Manager Module for Steam Games Downloader
-Handles installation, verification and management of SteamCMD
+SteamCMD Manager module for Steam Games Downloader
+Handles downloading, installing, and running SteamCMD
 """
 
 import os
 import sys
+import platform
 import logging
 import subprocess
-import platform
 import urllib.request
-import shutil
 import tarfile
 import zipfile
+import shutil
 import time
 from pathlib import Path
 
@@ -20,350 +20,267 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 class SteamCMD:
-    """
-    Manages the SteamCMD installation and operations
-    """
+    """Class to manage SteamCMD functionality"""
     
     def __init__(self, path=None):
-        """Initialize SteamCMD manager"""
+        """Initialize SteamCMD with the given path"""
         try:
+            # Determine the system type
+            self.system = platform.system().lower()
+            logger.info(f"Operating system: {self.system}")
+            
+            # Check if running in a container
+            self.is_container = self._check_if_container()
+            logger.info(f"Running in container: {self.is_container}")
+            
             # Set default path if not provided
             if path is None:
-                if os.name == 'nt':  # Windows
-                    path = os.path.join(os.environ.get('PROGRAMFILES', 'C:\\steamcmd'), 'steamcmd')
-                elif os.path.exists('/app'):  # Container
-                    path = '/root/steamcmd'
-                else:  # Linux/MacOS
-                    path = os.path.join(os.path.expanduser('~'), 'steamcmd')
+                if self.is_container or os.path.exists("/root/steamcmd"):
+                    path = "/root/steamcmd"
+                elif self.system == "windows":
+                    path = os.path.join(os.path.expanduser("~"), "steamcmd")
+                else:
+                    path = os.path.join(os.path.expanduser("~"), "steamcmd")
             
-            self.path = Path(path)
+            self.path = path
+            logger.info(f"SteamCMD path: {self.path}")
             
-            # Determine system type
-            self.system = 'windows' if os.name == 'nt' else 'linux'
-            if platform.system() == 'Darwin':
-                self.system = 'macos'
-            
-            # In container flag
-            self.in_container = self._check_if_container()
-            
-            logger.info(f"SteamCMD manager initialized with path: {self.path}")
-            logger.info(f"Platform detected as: {self.system}")
-            logger.info(f"Running in container: {self.in_container}")
-            
-            # Create directory if it doesn't exist
-            self.path.mkdir(parents=True, exist_ok=True)
+            # Ensure path exists
+            os.makedirs(self.path, exist_ok=True)
             
             # Set executable path based on system
-            if self.system == 'windows':
-                self.executable = self.path / 'steamcmd.exe'
+            if self.system == "windows":
+                self.exe = os.path.join(self.path, "steamcmd.exe")
             else:
-                self.executable = self.path / 'steamcmd.sh'
+                self.exe = os.path.join(self.path, "steamcmd.sh")
             
-            # URLs for downloading SteamCMD
-            self.download_urls = {
-                'windows': 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip',
-                'linux': 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz',
-                'macos': 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd_osx.tar.gz'
-            }
-        
+            logger.info(f"SteamCMD executable: {self.exe}")
+            
+            # Check if SteamCMD is already installed
+            self.installed = self._check_if_installed()
+            logger.info(f"SteamCMD installed: {self.installed}")
+            
         except Exception as e:
-            logger.error(f"Error initializing SteamCMD manager: {str(e)}")
+            logger.error(f"Error initializing SteamCMD: {str(e)}")
             raise
     
     def _check_if_container(self):
-        """Check if running in a container"""
-        if os.path.exists('/.dockerenv'):
+        """Check if running in a container environment"""
+        # Common ways to detect container environments
+        if os.path.exists("/.dockerenv"):
             return True
-        if os.path.exists('/app') and os.path.exists('/data'):
-            return True
+        
+        # Check cgroup
+        try:
+            with open("/proc/1/cgroup", "r") as f:
+                return "docker" in f.read() or "kubepods" in f.read()
+        except:
+            pass
+        
         return False
     
-    def is_installed(self):
-        """Check if SteamCMD is installed"""
-        return self.executable.exists()
-    
-    def install(self, force=False):
-        """Install SteamCMD if not already installed"""
-        try:
-            if self.is_installed() and not force:
-                logger.info("SteamCMD is already installed")
-                return True
-            
-            logger.info(f"Installing SteamCMD to {self.path}")
-            
-            # Download SteamCMD
-            download_url = self.download_urls.get(self.system)
-            if not download_url:
-                logger.error(f"No download URL available for {self.system}")
-                return False
-            
-            # Define archive path based on system
-            if self.system == 'windows':
-                archive_path = self.path / 'steamcmd.zip'
-            else:
-                archive_path = self.path / 'steamcmd.tar.gz'
-            
-            # Download archive
-            logger.info(f"Downloading SteamCMD from {download_url}")
-            try:
-                urllib.request.urlretrieve(download_url, archive_path)
-            except Exception as e:
-                logger.error(f"Failed to download SteamCMD: {str(e)}")
-                
-                # Attempt alternative download methods
-                if self.system != 'windows':
-                    try:
-                        logger.info("Attempting to download with curl")
-                        subprocess.run(
-                            ["curl", "-sqL", download_url, "-o", str(archive_path)],
-                            check=True
-                        )
-                    except:
-                        try:
-                            logger.info("Attempting to download with wget")
-                            subprocess.run(
-                                ["wget", "-q", download_url, "-O", str(archive_path)],
-                                check=True
-                            )
-                        except:
-                            logger.error("All download methods failed")
-                            return False
-            
-            # Extract archive
-            logger.info(f"Extracting SteamCMD to {self.path}")
-            try:
-                if self.system == 'windows':
-                    with zipfile.ZipFile(archive_path, 'r') as zip_ref:
-                        zip_ref.extractall(self.path)
-                else:
-                    with tarfile.open(archive_path, 'r:gz') as tar:
-                        tar.extractall(path=self.path)
-            except Exception as e:
-                logger.error(f"Failed to extract SteamCMD: {str(e)}")
-                return False
-            
-            # Make script executable on Unix-like systems
-            if self.system != 'windows':
-                try:
-                    os.chmod(self.executable, 0o755)
-                except:
-                    logger.warning("Failed to make steamcmd.sh executable")
-            
-            # Clean up archive
-            try:
-                os.remove(archive_path)
-            except:
-                logger.warning(f"Failed to remove archive {archive_path}")
-            
-            # Run SteamCMD once to update
-            logger.info("Running SteamCMD to complete setup")
-            result = self.run_command("+quit")
-            
-            # Verify installation
-            if self.is_installed():
-                logger.info("SteamCMD installed successfully")
-                return True
-            else:
-                logger.error("SteamCMD installation failed")
-                return False
+    def _check_if_installed(self):
+        """Check if SteamCMD is already installed"""
+        # For Windows
+        if self.system == "windows":
+            return os.path.exists(self.exe)
         
+        # For Linux and macOS
+        return os.path.exists(self.exe) and os.path.exists(os.path.join(self.path, "linux32", "steamcmd"))
+    
+    def install_steamcmd(self):
+        """Download and install SteamCMD"""
+        try:
+            logger.info("Installing SteamCMD...")
+            
+            # Create directory if it doesn't exist
+            os.makedirs(self.path, exist_ok=True)
+            
+            # Windows installation
+            if self.system == "windows":
+                return self._install_windows()
+            
+            # Linux/macOS installation
+            return self._install_linux()
+            
         except Exception as e:
             logger.error(f"Error installing SteamCMD: {str(e)}")
             return False
     
-    def verify(self):
-        """Verify SteamCMD installation"""
+    def _install_windows(self):
+        """Install SteamCMD on Windows"""
         try:
-            if not self.is_installed():
-                logger.warning("SteamCMD is not installed")
+            logger.info("Installing SteamCMD for Windows...")
+            
+            # Download SteamCMD zip
+            url = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip"
+            zip_path = os.path.join(self.path, "steamcmd.zip")
+            
+            logger.info(f"Downloading SteamCMD from {url}...")
+            urllib.request.urlretrieve(url, zip_path)
+            
+            # Extract zip
+            logger.info(f"Extracting to {self.path}...")
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(self.path)
+            
+            # Clean up
+            os.remove(zip_path)
+            
+            # Update executable permission flag
+            logger.info("Installation completed successfully")
+            self.installed = True
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error installing SteamCMD for Windows: {str(e)}")
+            return False
+    
+    def _install_linux(self):
+        """Install SteamCMD on Linux"""
+        try:
+            logger.info("Installing SteamCMD for Linux...")
+            
+            # Download SteamCMD tarball
+            url = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz"
+            tar_path = os.path.join(self.path, "steamcmd_linux.tar.gz")
+            
+            logger.info(f"Downloading SteamCMD from {url}...")
+            urllib.request.urlretrieve(url, tar_path)
+            
+            # Extract tarball
+            logger.info(f"Extracting to {self.path}...")
+            with tarfile.open(tar_path, 'r:gz') as tar:
+                tar.extractall(self.path)
+            
+            # Make the script executable
+            os.chmod(self.exe, 0o755)
+            
+            # Clean up
+            os.remove(tar_path)
+            
+            # Ensure linux32 directory exists
+            linux32_dir = os.path.join(self.path, "linux32")
+            if not os.path.exists(linux32_dir):
+                os.makedirs(linux32_dir, exist_ok=True)
+            
+            # Copy steamcmd binary to linux32 directory if it doesn't exist
+            steam_bin = os.path.join(self.path, "steamcmd")
+            linux32_bin = os.path.join(linux32_dir, "steamcmd")
+            if os.path.exists(steam_bin) and not os.path.exists(linux32_bin):
+                shutil.copy2(steam_bin, linux32_bin)
+                os.chmod(linux32_bin, 0o755)
+            
+            logger.info("Installation completed successfully")
+            self.installed = True
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error installing SteamCMD for Linux: {str(e)}")
+            return False
+    
+    def verify_installation(self):
+        """Verify SteamCMD installation by running a simple command"""
+        try:
+            logger.info("Verifying SteamCMD installation...")
+            
+            if not self.installed:
+                logger.warning("SteamCMD is not installed, cannot verify")
                 return False
             
-            # Run a simple command to check if SteamCMD works
-            logger.info("Verifying SteamCMD installation")
-            result = self.run_command("+quit")
+            # Run SteamCMD with quit command
+            if self.system == "windows":
+                cmd = [self.exe, "+quit"]
+            else:
+                cmd = [self.exe, "+quit"]
             
-            if result.returncode == 0:
+            logger.info(f"Running command: {' '.join(cmd)}")
+            process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            
+            if process.returncode == 0:
                 logger.info("SteamCMD verification successful")
                 return True
             else:
-                logger.warning("SteamCMD verification failed")
+                logger.warning(f"SteamCMD verification failed with return code {process.returncode}")
+                logger.warning(f"STDERR: {process.stderr}")
                 return False
-        
+            
         except Exception as e:
             logger.error(f"Error verifying SteamCMD: {str(e)}")
             return False
     
-    def run_command(self, command, capture_output=True):
-        """Run a SteamCMD command"""
-        try:
-            if not self.is_installed():
-                logger.error("Cannot run command, SteamCMD is not installed")
-                class FakeResult:
-                    def __init__(self):
-                        self.returncode = 1
-                        self.stdout = "SteamCMD not installed"
-                        self.stderr = "Error: SteamCMD not installed"
-                return FakeResult()
-            
-            # Build command
-            if self.system == 'windows':
-                cmd = [str(self.executable)]
-            else:
-                cmd = ["bash", str(self.executable)]
-            
-            # Add command
-            cmd.append(command)
-            
-            # Run command
-            logger.info(f"Running SteamCMD command: {' '.join(cmd)}")
-            
-            if capture_output:
-                result = subprocess.run(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    check=False
-                )
-            else:
-                result = subprocess.run(cmd, check=False)
-            
-            return result
-        
-        except Exception as e:
-            logger.error(f"Error running SteamCMD command: {str(e)}")
-            class FakeResult:
-                def __init__(self, error):
-                    self.returncode = 1
-                    self.stdout = ""
-                    self.stderr = f"Error: {error}"
-            return FakeResult(str(e))
-    
-    def download_game(self, app_id, install_dir, platform=None, validate=True, username=None, password=None):
+    def download_game(self, app_id, install_dir, username=None, password=None, validate=True, platform=None):
         """Download a game using SteamCMD"""
         try:
-            if not self.is_installed():
-                logger.error("Cannot download game, SteamCMD is not installed")
-                return False, "SteamCMD is not installed"
+            logger.info(f"Downloading game {app_id} to {install_dir}...")
             
-            # Ensure install directory exists
-            install_dir = Path(install_dir)
-            install_dir.mkdir(parents=True, exist_ok=True)
+            if not self.installed:
+                logger.warning("SteamCMD is not installed, cannot download game")
+                return False
+            
+            # Create install directory if it doesn't exist
+            os.makedirs(install_dir, exist_ok=True)
             
             # Build command
-            command = []
+            cmd = [self.exe]
             
             # Login
             if username and password:
-                command.append(f"+login {username} {password}")
+                cmd.extend([f"+login {username} {password}"])
             else:
-                command.append("+login anonymous")
+                cmd.append("+login anonymous")
             
-            # Set install directory
-            command.append(f"+force_install_dir {install_dir}")
+            # Set install directory and platform if specified
+            cmd.append(f"+force_install_dir {install_dir}")
             
-            # Set platform if specified
-            if platform and platform != "windows":
-                command.append(f"+@sSteamCmdForcePlatformType {platform}")
+            if platform:
+                cmd.append(f"+@sSteamCmdForcePlatformType {platform}")
             
             # Download app
             validate_flag = " validate" if validate else ""
-            command.append(f"+app_update {app_id}{validate_flag}")
+            cmd.append(f"+app_update {app_id}{validate_flag}")
             
             # Quit
-            command.append("+quit")
-            
-            # Join commands
-            cmd_str = " ".join(command)
+            cmd.append("+quit")
             
             # Run command
-            logger.info(f"Downloading game {app_id} to {install_dir}")
-            result = self.run_command(cmd_str, capture_output=True)
+            logger.info(f"Running command: {' '.join(cmd)}")
+            process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             
-            if result.returncode == 0:
+            if process.returncode == 0:
                 logger.info(f"Game {app_id} downloaded successfully")
-                return True, "Download completed successfully"
-            else:
-                logger.error(f"Game {app_id} download failed: {result.stderr}")
-                return False, f"Download failed: {result.stderr}"
-        
-        except Exception as e:
-            logger.error(f"Error downloading game {app_id}: {str(e)}")
-            return False, f"Error: {str(e)}"
-    
-    def fix_installation(self):
-        """Attempt to fix SteamCMD installation"""
-        try:
-            logger.info("Attempting to fix SteamCMD installation")
-            
-            # Check if fix script exists and we're in a container
-            fix_script = "/app/fix_steamcmd.sh"
-            if self.in_container and os.path.exists(fix_script):
-                logger.info(f"Running fix script: {fix_script}")
-                subprocess.run(
-                    ["bash", fix_script],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    check=False
-                )
-                
-                # Verify installation
-                if self.verify():
-                    logger.info("SteamCMD installation fixed with script")
-                    return True
-            
-            # If script doesn't exist or didn't fix the issue, force reinstall
-            logger.info("Reinstalling SteamCMD")
-            
-            # Remove installation if it exists
-            if self.path.exists():
-                try:
-                    shutil.rmtree(self.path)
-                    logger.info(f"Removed existing SteamCMD installation at {self.path}")
-                except:
-                    logger.warning(f"Failed to remove directory {self.path}")
-            
-            # Install SteamCMD
-            if self.install(force=True):
-                logger.info("SteamCMD reinstalled successfully")
                 return True
             else:
-                logger.error("Failed to fix SteamCMD installation")
+                logger.warning(f"Game download failed with return code {process.returncode}")
+                logger.warning(f"STDERR: {process.stderr}")
                 return False
-        
+            
         except Exception as e:
-            logger.error(f"Error fixing SteamCMD installation: {str(e)}")
+            logger.error(f"Error downloading game: {str(e)}")
             return False
 
 # Singleton instance
 _instance = None
 
-def get_steamcmd(path=None):
+def get_steamcmd():
     """Get the singleton SteamCMD instance"""
     global _instance
     if _instance is None:
-        _instance = SteamCMD(path)
+        _instance = SteamCMD()
     return _instance
 
 # For direct testing
 if __name__ == "__main__":
     # Configure logging
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
     
-    # Get SteamCMD instance
+    # Test SteamCMD
     steamcmd = get_steamcmd()
     
-    # Check if installed
-    if not steamcmd.is_installed():
-        print("SteamCMD is not installed. Installing...")
-        steamcmd.install()
-    else:
-        print("SteamCMD is already installed. Verifying...")
-        steamcmd.verify()
-    
-    # Print status
-    print(f"SteamCMD path: {steamcmd.path}")
-    print(f"SteamCMD executable: {steamcmd.executable}")
-    print(f"System type: {steamcmd.system}")
-    print(f"In container: {steamcmd.in_container}")
+    if not steamcmd.installed:
+        steamcmd.install_steamcmd()
+        
+    steamcmd.verify_installation()
