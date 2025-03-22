@@ -1,158 +1,215 @@
 #!/usr/bin/env python3
 """
-Extremely simple launcher for Steam Games Downloader
+Simple launcher for Steam Games Downloader
+This script handles import paths and gracefully handles errors
 """
 
 import os
 import sys
 import logging
+import platform
 import traceback
 from pathlib import Path
+import importlib
+import shutil
 
-# Absolute path to this script
-script_path = os.path.dirname(os.path.abspath(__file__))
-
-# Configure logging first to capture everything
+# Set up logging
 logging.basicConfig(
-    level=logging.DEBUG,  # Set to DEBUG for maximum information
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(os.path.join(script_path, "app.log"))
-    ]
+    level=logging.DEBUG, 
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("simple")
-logger.info("=" * 80)
-logger.info("Starting Steam Games Downloader (simple launcher)")
-logger.info("=" * 80)
 
-# Log system information
-logger.info(f"Python version: {sys.version}")
-logger.info(f"Platform: {sys.platform}")
-logger.info(f"Current directory: {script_path}")
-logger.info(f"Is Docker container: {os.path.exists('/.dockerenv')}")
+def ensure_path():
+    """Ensure proper import paths are set"""
+    # Add current directory to path
+    cwd = os.getcwd()
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)
+    
+    # Add subdirectories to path
+    for subdir in ["ui", "modules", "utils"]:
+        subdir_path = os.path.join(cwd, subdir)
+        if os.path.isdir(subdir_path) and subdir_path not in sys.path:
+            sys.path.append(subdir_path)
+    
+    # Log Python path
+    logger.info(f"Python path: {':'.join(sys.path)}")
 
-try:
-    # Ensure all necessary directories exist
-    for directory in ["ui", "modules", "utils", "logs", "data", "downloads"]:
-        dir_path = os.path.join(script_path, directory)
-        Path(dir_path).mkdir(exist_ok=True)
-        logger.info(f"Ensuring directory exists: {dir_path}")
-
-    # Ensure data subdirectories exist
-    for subdir in ["config", "cache", "library"]:
-        data_dir = os.path.join(script_path, f"data/{subdir}")
-        Path(data_dir).mkdir(exist_ok=True)
-        logger.info(f"Ensuring data directory exists: {data_dir}")
-
-    # Create empty __init__.py files if they don't exist
-    for directory in ["", "ui", "modules", "utils"]:
-        dir_path = script_path if directory == "" else os.path.join(script_path, directory)
-        init_file = os.path.join(dir_path, "__init__.py")
+def ensure_init_files():
+    """Ensure all directories have __init__.py files"""
+    for subdir in ["ui", "modules", "utils"]:
+        init_file = os.path.join(os.getcwd(), subdir, "__init__.py")
         if not os.path.exists(init_file):
-            with open(init_file, "w") as f:
-                f.write(f'"""{directory} package"""')
-            logger.info(f"Created {init_file}")
-        else:
-            logger.info(f"Init file already exists: {init_file}")
+            try:
+                Path(init_file).touch()
+                logger.info(f"Created {init_file}")
+            except Exception as e:
+                logger.error(f"Error creating {init_file}: {str(e)}")
 
-    # Ensure Python can find our modules
-    for path in [script_path, 
-               os.path.join(script_path, "ui"),
-               os.path.join(script_path, "modules"),
-               os.path.join(script_path, "utils")]:
-        if path not in sys.path:
-            sys.path.insert(0, path)
-            logger.info(f"Added to Python path: {path}")
-        else:
-            logger.info(f"Already in Python path: {path}")
-
-    # Print Python path for debugging
-    logger.info("Full Python path:")
-    for i, path in enumerate(sys.path):
-        logger.info(f"  {i}: {path}")
-
-    # Check if ui directory has the required files
-    ui_dir = os.path.join(script_path, "ui")
-    if os.path.exists(ui_dir):
-        logger.info(f"Files in ui directory:")
-        for file in os.listdir(ui_dir):
-            file_path = os.path.join(ui_dir, file)
-            if os.path.isfile(file_path):
-                logger.info(f"  - {file} ({os.path.getsize(file_path)} bytes)")
-
-    # Attempt to import each required module separately
-    try:
-        logger.info("Testing import of download_tab")
-        import download_tab
-        logger.info("Success: download_tab imported directly")
-    except ImportError as e:
-        logger.info(f"Failed to import download_tab directly: {e}")
-        try:
-            logger.info("Testing import from ui.download_tab")
-            from ui import download_tab
-            logger.info("Success: download_tab imported from ui")
-        except ImportError as e:
-            logger.error(f"Failed to import download_tab from ui: {e}")
-
-    try:
-        logger.info("Testing import of config")
-        import config
-        logger.info("Success: config imported directly")
-    except ImportError as e:
-        logger.info(f"Failed to import config directly: {e}")
-        try:
-            logger.info("Testing import from utils.config")
-            from utils import config
-            logger.info("Success: config imported from utils")
-        except ImportError as e:
-            logger.error(f"Failed to import config from utils: {e}")
-
-    # Attempt to import and run the UI
-    logger.info("Attempting to import main_ui")
-    try:
-        logger.info("Trying direct import: from main_ui import create_ui")
-        from main_ui import create_ui
-        logger.info("Success: main_ui imported directly")
-    except ImportError as e:
-        logger.info(f"Direct import failed: {e}")
-        try:
-            logger.info("Trying full path: from ui.main_ui import create_ui")
-            from ui.main_ui import create_ui
-            logger.info("Success: main_ui imported from ui")
-        except ImportError as e:
-            logger.error(f"Full path import also failed: {e}")
-            
-            # Last resort: try to fix imports by copying files
-            logger.info("Attempting to copy UI files to current directory as a last resort")
-            for ui_file in ['main_ui.py', 'download_tab.py', 'library_tab.py', 'settings_tab.py']:
-                source = os.path.join(script_path, 'ui', ui_file)
-                if os.path.exists(source):
-                    import shutil
-                    dest = os.path.join(script_path, ui_file)
-                    shutil.copy2(source, dest)
-                    logger.info(f"Copied {source} to {dest}")
-            
-            # Try import again after copying
-            logger.info("Trying direct import again after copying files")
-            from main_ui import create_ui
-            logger.info("Success: main_ui imported after copying")
-
-    # If we get here, we've successfully imported create_ui
-    logger.info("Creating UI")
-    app = create_ui()
+def check_system_info():
+    """Print system information for debugging"""
+    logger.info(f"Python version: {sys.version}")
+    logger.info(f"Platform: {platform.platform()}")
+    logger.info(f"Current directory: {os.getcwd()}")
     
-    logger.info("Launching application")
-    app.launch(
-        server_name="0.0.0.0",
-        server_port=7860,
-        share=False,
-        prevent_thread_lock=False
-    )
-    logger.info("Application launched successfully")
+    # Check if running in Docker
+    in_docker = os.path.exists("/.dockerenv")
+    logger.info(f"Running in Docker: {in_docker}")
     
-except Exception as e:
-    logger.error(f"Error starting application: {str(e)}")
-    logger.error("Traceback:")
-    logger.error(traceback.format_exc())
-    sys.exit(1) 
+    # Check directory structure
+    for subdir in ["ui", "modules", "utils"]:
+        subdir_path = os.path.join(os.getcwd(), subdir)
+        logger.info(f"Directory {subdir_path} exists: {os.path.isdir(subdir_path)}")
+
+def check_required_files():
+    """Check if required UI files exist"""
+    ui_dir = os.path.join(os.getcwd(), "ui")
+    if not os.path.isdir(ui_dir):
+        logger.error(f"UI directory not found: {ui_dir}")
+        return False
+    
+    # Check for main UI files
+    required_files = [
+        "main_ui.py",
+        "download_tab.py",
+        "library_tab.py",
+        "settings_tab.py"
+    ]
+    
+    for file in required_files:
+        file_path = os.path.join(ui_dir, file)
+        if os.path.exists(file_path):
+            file_size = os.path.getsize(file_path)
+            logger.info(f"File {file} exists with size {file_size} bytes")
+        else:
+            logger.error(f"Required file not found: {file_path}")
+            return False
+    
+    return True
+
+def safe_import(module_name, fallback_path=None):
+    """Safely import a module with fallback"""
+    logger.info(f"Attempting to import {module_name}")
+    
+    try:
+        # Try direct import
+        module = importlib.import_module(module_name)
+        logger.info(f"Successfully imported {module_name}")
+        return module
+    except ImportError as e:
+        logger.warning(f"Failed to import {module_name}: {str(e)}")
+        
+        # Try from ui package
+        try:
+            module = importlib.import_module(f"ui.{module_name}")
+            logger.info(f"Successfully imported ui.{module_name}")
+            return module
+        except ImportError as e:
+            logger.warning(f"Failed to import ui.{module_name}: {str(e)}")
+            
+            # If fallback path provided, try copying the file
+            if fallback_path:
+                try:
+                    # Check if file exists
+                    if os.path.exists(fallback_path):
+                        # Copy to current directory
+                        dest_path = os.path.basename(fallback_path)
+                        shutil.copy2(fallback_path, dest_path)
+                        logger.info(f"Copied {fallback_path} to {dest_path}")
+                        
+                        # Try importing again
+                        module_name_only = os.path.splitext(os.path.basename(fallback_path))[0]
+                        module = importlib.import_module(module_name_only)
+                        logger.info(f"Successfully imported {module_name_only} after copying")
+                        return module
+                except Exception as e:
+                    logger.error(f"Failed to import after copying: {str(e)}")
+            
+            raise ImportError(f"Could not import {module_name}")
+
+def main():
+    """Main entry point"""
+    try:
+        # Setup and checks
+        check_system_info()
+        ensure_path()
+        ensure_init_files()
+        
+        if not check_required_files():
+            logger.error("Some required files are missing")
+            sys.exit(1)
+        
+        # Try to import required modules
+        try:
+            download_tab = safe_import("download_tab", 
+                                     fallback_path=os.path.join(os.getcwd(), "ui", "download_tab.py"))
+            logger.info("Successfully imported download_tab")
+        except ImportError as e:
+            logger.error(f"Failed to import download_tab: {str(e)}")
+            sys.exit(1)
+        
+        try:
+            import utils.config as config
+            logger.info("Successfully imported utils.config")
+        except ImportError as e:
+            logger.error(f"Failed to import config: {str(e)}")
+            
+            # Try fallback
+            try:
+                config = safe_import("config", 
+                                     fallback_path=os.path.join(os.getcwd(), "utils", "config.py"))
+                logger.info("Successfully imported config via fallback")
+            except ImportError as e:
+                logger.error(f"Failed to import config via fallback: {str(e)}")
+                sys.exit(1)
+        
+        # Import main UI
+        try:
+            main_ui = safe_import("main_ui", 
+                                 fallback_path=os.path.join(os.getcwd(), "ui", "main_ui.py"))
+            logger.info("Successfully imported main_ui")
+        except ImportError as e:
+            logger.error(f"Failed to import main_ui: {str(e)}")
+            sys.exit(1)
+        
+        # Last resort: copy all UI files to current directory
+        if not hasattr(main_ui, "create_ui"):
+            logger.warning("main_ui module doesn't have create_ui function, trying last resort")
+            
+            # Copy all UI files to current directory
+            ui_dir = os.path.join(os.getcwd(), "ui")
+            for file in os.listdir(ui_dir):
+                if file.endswith(".py"):
+                    src_path = os.path.join(ui_dir, file)
+                    dest_path = file
+                    try:
+                        shutil.copy2(src_path, dest_path)
+                        logger.info(f"Copied {src_path} to {dest_path}")
+                    except Exception as e:
+                        logger.error(f"Failed to copy {src_path}: {str(e)}")
+            
+            # Try importing again
+            try:
+                main_ui = importlib.import_module("main_ui")
+                logger.info("Successfully imported main_ui after copying")
+            except ImportError as e:
+                logger.error(f"Still failed to import main_ui: {str(e)}")
+                sys.exit(1)
+        
+        # Launch the application
+        logger.info("Launching the application")
+        
+        # Get the UI interface
+        app = main_ui.create_ui()
+        
+        # Launch the app
+        app.launch(server_name="0.0.0.0", server_port=7860)
+        
+    except Exception as e:
+        logger.error(f"Unhandled exception: {str(e)}")
+        logger.error(traceback.format_exc())
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main() 

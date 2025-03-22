@@ -1,41 +1,63 @@
 #!/usr/bin/env python3
 """
-Wrapper script for Steam Games Downloader
-
-This script ensures the correct Python path is set before running the application.
+Main launcher for Steam Games Downloader
 """
 
 import os
 import sys
-import subprocess
+import logging
+from pathlib import Path
 
-# Get the absolute path of the current directory
-current_dir = os.path.dirname(os.path.abspath(__file__))
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger("run")
 
-# Ensure current directory is in Python path
-if current_dir not in sys.path:
-    sys.path.insert(0, current_dir)
+def main():
+    """Main entry point"""
+    logger.info("Starting Steam Games Downloader...")
+    
+    # Add directories to Python path
+    cwd = os.getcwd()
+    for path in [cwd, 
+                os.path.join(cwd, "ui"),
+                os.path.join(cwd, "modules"),
+                os.path.join(cwd, "utils")]:
+        if path not in sys.path:
+            sys.path.insert(0, path)
+            logger.info(f"Added to Python path: {path}")
+    
+    # Ensure __init__.py files exist
+    for subdir in ["ui", "modules", "utils"]:
+        init_file = os.path.join(cwd, subdir, "__init__.py")
+        if not os.path.exists(init_file):
+            Path(init_file).touch()
+            logger.info(f"Created {init_file}")
+    
+    # Import main UI
+    try:
+        from ui.main_ui import create_ui
+        logger.info("Successfully imported main_ui")
+    except ImportError as e:
+        logger.error(f"Failed to import main_ui from ui: {str(e)}")
+        
+        try:
+            import main_ui
+            create_ui = main_ui.create_ui
+            logger.info("Successfully imported main_ui directly")
+        except ImportError as e:
+            logger.error(f"Failed to import main_ui directly: {str(e)}")
+            sys.exit(1)
+    
+    # Create and launch UI
+    logger.info("Creating UI interface...")
+    interface = create_ui()
+    
+    # Launch UI
+    logger.info("Launching application...")
+    interface.launch(server_name="0.0.0.0", server_port=7860)
 
-# Ensure subdirectories are in Python path
-for subdir in ["ui", "modules", "utils"]:
-    subdir_path = os.path.join(current_dir, subdir)
-    if os.path.isdir(subdir_path) and subdir_path not in sys.path:
-        sys.path.insert(0, subdir_path)
-
-# Print Python path for debugging
-print("Python path:")
-for path in sys.path:
-    print(f"  - {path}")
-
-# Run the main application
-try:
-    print("Starting Steam Games Downloader...")
-    import main
-    main.main()
-except ImportError as e:
-    print(f"Import error: {str(e)}")
-    print("Make sure the project structure is correct with 'ui', 'modules', and 'utils' directories")
-    sys.exit(1)
-except Exception as e:
-    print(f"Error starting application: {str(e)}")
-    sys.exit(1) 
+if __name__ == "__main__":
+    main() 

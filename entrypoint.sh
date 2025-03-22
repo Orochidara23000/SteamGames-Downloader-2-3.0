@@ -1,61 +1,111 @@
 #!/bin/bash
-set -euo pipefail
+set -e
 
-# Print diagnostic information
-echo "Starting Steam Downloader container..."
+# Show environment info
 echo "Running as user: $(id)"
 echo "Working directory: $(pwd)"
-echo "Steam download path: ${STEAM_DOWNLOAD_PATH:-Not set}"
-echo "Python path: ${PYTHONPATH:-Not set}"
+echo "Steam download path: $STEAM_DOWNLOAD_PATH"
 
-# Ensure necessary directories exist and have proper permissions
-mkdir -p /app/steamcmd /app/logs "${STEAM_DOWNLOAD_PATH}"
-mkdir -p /app/ui /app/modules /app/utils /app/data
-chmod 755 /app/steamcmd /app/logs "${STEAM_DOWNLOAD_PATH}"
+# Set Python path to include our directories
+export PYTHONPATH="/app:/app/ui:/app/modules:/app/utils"
+echo "Python path: $PYTHONPATH"
 
-# Ensure permissions are correct for the download directory
-chown -R $(id -u):$(id -g) "${STEAM_DOWNLOAD_PATH}"
-chmod -R 755 "${STEAM_DOWNLOAD_PATH}"
+# Run initialization checks
+echo "Running initialization checks..."
 
-# Create empty __init__.py files if they don't exist
-touch /app/__init__.py
-touch /app/ui/__init__.py
-touch /app/modules/__init__.py
-touch /app/utils/__init__.py
+# Check if data directories are writable
+for dir in "/data" "/data/downloads" "/root/steamcmd"; do
+    if [ -d "$dir" ]; then
+        if [ -w "$dir" ]; then
+            echo "✅ Directory $dir exists and is writable"
+        else
+            echo "❌ Directory $dir exists but is not writable"
+            exit 1
+        fi
+    else
+        echo "Creating directory $dir"
+        mkdir -p "$dir"
+        if [ $? -ne 0 ]; then
+            echo "❌ Failed to create directory $dir"
+            exit 1
+        fi
+        echo "✅ Created directory $dir"
+    fi
+done
 
-# If SteamCMD exists, make sure it's executable
-if [ -f "/app/steamcmd/steamcmd.sh" ]; then
-    chmod +x /app/steamcmd/steamcmd.sh
+# Check for required system dependencies
+echo "Checking system dependencies..."
+for cmd in python3 pip3; do
+    if command -v $cmd >/dev/null 2>&1; then
+        echo "✅ $cmd is installed"
+    else
+        echo "❌ $cmd is not installed"
+        exit 1
+    fi
+done
+
+# Check for required Python modules
+echo "Checking Python modules..."
+python3 -c "
+import sys
+required = ['gradio', 'pandas', 'requests']
+missing = []
+for module in required:
+    try:
+        __import__(module)
+        print(f'✅ {module} is installed')
+    except ImportError:
+        missing.append(module)
+        print(f'❌ {module} is not installed')
+if missing:
+    sys.exit(1)
+"
+
+if [ $? -ne 0 ]; then
+    echo "Installing missing Python modules..."
+    pip3 install gradio pandas requests
 fi
 
-# Check if we need to use the new init_check.py file
-if [ -f "init_check.py.new" ]; then
-    echo "Using new initialization check script..."
-    mv init_check.py.new init_check.py
+# Check for SteamCMD
+if [ -f "/root/steamcmd/steamcmd.sh" ]; then
+    echo "✅ SteamCMD is installed"
+else
+    echo "⚠️ SteamCMD not found, will attempt to install it"
+    mkdir -p /root/steamcmd
+    cd /root/steamcmd
+    curl -sqL "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" | tar zxvf -
+    if [ -f "/root/steamcmd/steamcmd.sh" ]; then
+        echo "✅ SteamCMD installed successfully"
+        # Test SteamCMD
+        echo "Testing SteamCMD..."
+        ./steamcmd.sh +quit
+        if [ $? -eq 0 ]; then
+            echo "✅ SteamCMD working correctly"
+        else
+            echo "⚠️ SteamCMD test failed, but continuing anyway"
+        fi
+    else
+        echo "⚠️ SteamCMD installation failed, but continuing anyway"
+    fi
+    cd /app
 fi
 
-# Set PYTHONPATH if not already set
-if [ -z "${PYTHONPATH:-}" ]; then
-    export PYTHONPATH="/app:/app/ui:/app/modules:/app/utils"
-    echo "Set PYTHONPATH to: $PYTHONPATH"
-fi
+echo "All checks passed, starting application..."
 
-# Run the diagnostic check first
-echo "Running diagnostic checks..."
-if ! python3 init_check.py; then
-    echo "Diagnostic checks failed. Exiting."
-    exit 1
-fi
-
-# Start the application and keep it running in the foreground
-echo "Starting main application..."
+# Prioritize using simple.py if it exists
 if [ -f "simple.py" ]; then
     echo "Using simple launcher script..."
     exec python3 simple.py
+# Otherwise try run.py
 elif [ -f "run.py" ]; then
-    echo "Using wrapper script run.py..."
+    echo "Using run.py script..."
     exec python3 run.py
-else
-    echo "Using main.py directly..."
+# Fall back to main.py if available
+elif [ -f "main.py" ]; then
+    echo "Using main.py script..."
     exec python3 main.py
+# Final fallback
+else
+    echo "No launcher script found, using python -m gradio..."
+    exec python3 -m gradio ui/main_ui.py
 fi
