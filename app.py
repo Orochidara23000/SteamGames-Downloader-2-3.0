@@ -1,72 +1,83 @@
+#!/usr/bin/env python3
+"""
+Steam Games Downloader - Simple Entry Point
+
+This script provides a simple entry point for the Steam Games Downloader
+application, with improved import handling.
+"""
+
 import os
 import sys
 import logging
-import gradio as gr
-import time
-import threading
-from main import create_download_games_tab, create_library_tab, create_setup_tab, create_settings_tab
-from main import setup_refresh_interval, process_download_queue
+from pathlib import Path
 
-# Configure logging
+# Ensure paths are set correctly
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
+for subdir in ["ui", "modules", "utils"]:
+    subdir_path = os.path.join(current_dir, subdir)
+    if os.path.exists(subdir_path) and subdir_path not in sys.path:
+        sys.path.insert(0, subdir_path)
+
+# Set up logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(sys.stdout)
+        logging.StreamHandler(),
+        logging.FileHandler("app.log")
     ]
 )
+logger = logging.getLogger("app")
 
-logger = logging.getLogger(__name__)
-logger.info("Starting Steam Games Downloader via app.py entry point")
-
-# Set environment variables
-os.environ["ENABLE_SHARE"] = "True"
-os.environ["PORT"] = os.environ.get("PORT", "8080")
-
-# Create and launch the application
-if __name__ == "__main__":
-    print("="*50)
-    print("Starting Steam Games Downloader via app.py")
-    print("="*50)
+# Initialize directories
+def initialize_directories():
+    """Initialize necessary directories"""
+    directories = ["logs", "data", "downloads"]
+    for directory in directories:
+        Path(directory).mkdir(exist_ok=True)
     
-    # Initialize background threads
+    # Create data subdirectories
+    data_subdirs = ["config", "cache", "library"]
+    for subdir in data_subdirs:
+        Path(f"data/{subdir}").mkdir(exist_ok=True)
+    
+    logger.info("Directories initialized")
+
+# Main function
+def main():
+    """Main application entry point"""
+    logger.info("Starting Steam Games Downloader")
+    
+    # Initialize directories
+    initialize_directories()
+    
     try:
-        download_queue_thread = threading.Thread(target=process_download_queue, daemon=True)
-        download_queue_thread.start()
-        logger.info("Download queue thread started")
+        # Try importing the main UI directly
+        try:
+            from main_ui import create_ui
+            logger.info("Imported UI using direct import")
+        except ImportError:
+            # Fall back to using full import path
+            logger.info("Direct import failed, trying with full path")
+            from ui.main_ui import create_ui
+        
+        # Create and launch the UI
+        app = create_ui()
+        app.launch(
+            server_name="0.0.0.0",
+            server_port=7860,
+            share=False,
+            prevent_thread_lock=False
+        )
+        
+    except ImportError as e:
+        logger.error(f"Import error: {str(e)}")
+        logger.error("Make sure the project structure is correct with 'ui', 'modules', and 'utils' directories")
+        sys.exit(1)
     except Exception as e:
-        logger.error(f"Error starting download queue thread: {str(e)}")
-    
-    # Create the interface directly instead of importing main.py
-    with gr.Blocks(title="Steam Games Downloader") as app:
-        gr.Markdown("# Steam Games Downloader")
-        
-        with gr.Tabs():
-            download_tab = create_download_games_tab()
-            library_tab = create_library_tab()
-            setup_tab = create_setup_tab()
-            settings_tab = create_settings_tab()
-        
-        # Set up periodic refresh for downloads
-        refresh_interval = setup_refresh_interval()
-        
-        logger.info("Interface created, starting application...")
-    
-    # Launch with settings optimized for containers
-    app.queue().launch(
-        server_port=int(os.environ.get("PORT", 8080)),
-        server_name="0.0.0.0",
-        share=True,
-        show_error=True,
-        prevent_thread_lock=True
-    )
-    
-    # We shouldn't reach here if prevent_thread_lock is True,
-    # but just in case, add an infinite loop to keep the container alive
-    logger.info("Application started. Container will stay running.")
-    try:
-        while True:
-            time.sleep(60)
-            logger.info("Application heartbeat - still running")
-    except KeyboardInterrupt:
-        logger.info("Application shutdown requested, exiting...") 
+        logger.error(f"Error starting application: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main() 
