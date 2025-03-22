@@ -1,70 +1,61 @@
 # Steam Games Downloader
 
-A web-based application to download Steam games using SteamCMD.
+A user-friendly interface for downloading Steam games using SteamCMD.
 
 ## Features
 
-- Download games using SteamCMD
-- Support for both anonymous (free games) and account-based downloads
-- Queue system for multiple downloads
-- Monitoring of download progress
-- Easy-to-use web interface
+- Download Steam games using a simple interface
+- Check game information from Steam URLs or IDs
+- Manage your local game library
+- Configure SteamCMD settings
+- Works in containerized environments
 
-## Deployment Options
+## Project Structure
 
-### Local Development
+The project has been refactored into a modular structure for better maintainability:
 
-1. Install dependencies:
+```
+SteamGames-Downloader/
+├── main.py             # Main application entry point
+├── modules/            # Core functionality modules
+│   ├── download_manager.py     # Manages download queue and processes
+│   ├── library_manager.py      # Manages the game library
+│   ├── steam_api.py            # Steam API integration
+│   └── steamcmd_manager.py     # SteamCMD interaction
+├── ui/                 # User interface components
+│   ├── download_tab.py         # UI for downloading games
+│   ├── library_tab.py          # UI for managing game library
+│   ├── main_ui.py              # Main UI that combines all tabs
+│   └── settings_tab.py         # UI for configuring settings
+└── utils/              # Utility functions and helpers
+    └── config.py               # Configuration management
+```
+
+## Installation
+
+1. Clone the repository
+2. Install the required dependencies:
    ```
    pip install -r requirements.txt
    ```
-
-2. Run the application:
+3. Run the application:
    ```
    python main.py
    ```
 
-### Cloud Deployment
+## Docker Deployment
 
-The application is designed to work in cloud environments that support Python web applications:
+The application can be deployed in a Docker container:
 
-#### Environment Variables
+```bash
+docker build -t steam-games-downloader .
+docker run -p 7860:7860 -v /path/to/downloads:/downloads steam-games-downloader
+```
 
-- `PORT`: Port to run the application (default: 8080)
-- `LOG_LEVEL`: Logging level (default: INFO)
-- `STEAM_DOWNLOAD_PATH`: Path to store downloaded games (default: /data/downloads)
-- `ENABLE_SHARE`: Enable Gradio sharing feature (default: True)
-- `DEBUG`: Enable debug mode (default: False)
+## License
 
-#### Hugging Face Spaces
+MIT License
 
-1. Create a new Space on Hugging Face
-2. Choose Gradio as the SDK
-3. Upload this repository
-4. The application will automatically start using app.py as the entry point
+## Note
 
-#### Other Cloud Platforms
-
-1. Deploy to your preferred platform that supports Python
-2. Make sure to set the appropriate environment variables
-3. The application can be started with:
-   ```
-   python app.py
-   ```
-   or
-   ```
-   python main.py
-   ```
-
-## File Structure
-
-- `main.py`: Main application code
-- `app.py`: Entry point for cloud deployments
-- `requirements.txt`: Required Python dependencies
-
-## Requirements
-
-- Python 3.10+
-- SteamCMD (required for actual game downloads)
-- At least 1GB of RAM
-- Sufficient disk space for game downloads
+This application is in demo mode if SteamCMD is not installed. In demo mode, downloads are simulated for demonstration purposes. To enable actual downloads, make sure SteamCMD is installed and properly configured in the Settings tab.

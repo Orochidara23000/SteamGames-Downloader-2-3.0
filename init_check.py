@@ -1,125 +1,187 @@
 #!/usr/bin/env python3
 """
-Diagnostic script to check environment before starting the main application.
+Initialization Check Script
+
+This script performs system checks at startup to ensure the environment
+is properly configured for running the Steam Games Downloader.
 """
 
 import os
 import sys
-import platform
 import logging
+import platform
+import shutil
+import subprocess
+from pathlib import Path
 
-# Set up logging
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[logging.StreamHandler()]
 )
 
-def check_directories():
-    """Check if required directories exist and have proper permissions."""
-    directories = [
-        ('/app', 'Application directory'),
-        ('/app/steamcmd', 'SteamCMD directory'),
-        (os.environ.get('STEAM_DOWNLOAD_PATH', '/data/downloads'), 'Download directory'),
-        ('/app/logs', 'Logs directory')
-    ]
+logger = logging.getLogger("InitCheck")
 
-    for directory, description in directories:
-        logging.info(f"Checking {description}: {directory}")
-        if not os.path.exists(directory):
-            try:
-                os.makedirs(directory, exist_ok=True)
-                logging.info(f"Created {directory}")
-            except Exception as e:
-                logging.error(f"Failed to create {directory}: {str(e)}")
-                return False
-
-        # Check permissions
-        try:
-            test_file = os.path.join(directory, '.permission_test')
-            with open(test_file, 'w') as f:
-                f.write('test')
-            os.remove(test_file)
-            logging.info(f"{description} is writable")
-        except Exception as e:
-            logging.error(f"{description} is not writable: {str(e)}")
-            return False
-
-    return True
-
-def check_environment_variables():
-    """Check if required environment variables are set."""
-    required_vars = ['STEAM_DOWNLOAD_PATH']
-    missing_vars = [var for var in required_vars if not os.environ.get(var)]
-
-    if missing_vars:
-        logging.error(f"Missing environment variables: {', '.join(missing_vars)}")
-        return False
-
-    logging.info("Environment variables are set.")
-    return True
-
-def check_dependencies():
-    """Check if required system libraries are installed."""
-    dependencies = [
-        ('/lib/x86_64-linux-gnu/libstdc++.so.6', 'lib32gcc-s1'),
-        ('/usr/lib/x86_64-linux-gnu/libcurl.so.4', 'libcurl4'),
-    ]
-
-    missing_deps = [f"{package} ({path})" for path, package in dependencies if not os.path.exists(path)]
-
-    if missing_deps:
-        logging.error(f"Missing system dependencies: {', '.join(missing_deps)}")
-        return False
-
-    logging.info("All required system dependencies are installed.")
-    return True
-
-def check_python_modules():
-    """Check if required Python modules are installed."""
-    required_modules = ['gradio', 'requests', 'psutil', 'bs4', 'lxml']
-    missing_modules = [module for module in required_modules if not _is_module_installed(module)]
-
-    if missing_modules:
-        logging.error(f"Missing Python modules: {', '.join(missing_modules)}")
-        return False
-
-    logging.info("All required Python modules are installed.")
-    return True
-
-def _is_module_installed(module_name):
-    """Check if a Python module is installed."""
+def check_system():
+    """Check system compatibility and environment"""
+    logger.info("Checking system compatibility...")
+    
+    # Check Python version
+    python_version = platform.python_version()
+    logger.info(f"Python version: {python_version}")
+    
+    # Check OS
+    os_system = platform.system()
+    os_release = platform.release()
+    logger.info(f"Operating System: {os_system} {os_release}")
+    
+    # Check if we're in a container
+    is_container = os.path.exists("/.dockerenv") or os.path.exists("/var/run/docker.sock")
+    logger.info(f"Running in container: {is_container}")
+    
+    # Check for required libraries
     try:
-        __import__(module_name)
-        return True
+        import gradio
+        logger.info(f"Gradio version: {gradio.__version__}")
     except ImportError:
+        logger.error("Gradio is not installed. Please install it with: pip install gradio")
         return False
+    
+    try:
+        import pandas
+        logger.info(f"Pandas version: {pandas.__version__}")
+    except ImportError:
+        logger.error("Pandas is not installed. Please install it with: pip install pandas")
+        return False
+    
+    try:
+        import requests
+        logger.info(f"Requests version: {requests.__version__}")
+    except ImportError:
+        logger.error("Requests is not installed. Please install it with: pip install requests")
+        return False
+    
+    return True
 
-def main():
-    """Run all checks and report status."""
-    logging.info(f"Running initialization checks on {platform.platform()}")
+def check_directories():
+    """Check and create necessary directories"""
+    logger.info("Checking directories...")
+    
+    # Essential directories
+    directories = [
+        "logs",
+        "data",
+        "data/config",
+        "data/cache",
+        "data/library",
+        "downloads",
+        "downloads/steamapps",
+        "downloads/steamapps/common"
+    ]
+    
+    for directory in directories:
+        path = Path(directory)
+        if not path.exists():
+            logger.info(f"Creating directory: {path}")
+            path.mkdir(parents=True, exist_ok=True)
+        
+        # Check permissions
+        if not os.access(path, os.W_OK):
+            logger.warning(f"No write permission for directory: {path}")
+            if os.name != 'nt':  # Not on Windows
+                logger.info(f"Attempting to fix permissions for {path}")
+                try:
+                    os.chmod(path, 0o755)
+                    if os.access(path, os.W_OK):
+                        logger.info(f"Fixed permissions for {path}")
+                    else:
+                        logger.warning(f"Could not fix permissions for {path}")
+                except Exception as e:
+                    logger.error(f"Error fixing permissions: {str(e)}")
+    
+    return True
+
+def check_steamcmd():
+    """Check SteamCMD installation"""
+    logger.info("Checking SteamCMD...")
+    
+    # Import our SteamCMD manager
+    try:
+        from modules.steamcmd_manager import get_instance
+        steamcmd = get_instance()
+        
+        if steamcmd.is_installed():
+            logger.info(f"SteamCMD found at: {steamcmd.steamcmd_path}")
+            logger.info("Testing SteamCMD...")
+            
+            if steamcmd.verify_installation():
+                logger.info("SteamCMD is working correctly")
+                return True
+            else:
+                logger.warning("SteamCMD test failed, but will try to recover during runtime")
+        else:
+            logger.warning("SteamCMD not found, but will be installed during runtime if needed")
+            
+        # Note: We don't fail if SteamCMD is not installed
+        # The application will handle this during runtime
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error checking SteamCMD: {str(e)}")
+        logger.warning("Will attempt to recover during runtime")
+        return True
+
+def check_network():
+    """Check network connectivity for Steam services"""
+    logger.info("Checking network connectivity...")
+    
+    try:
+        import requests
+        
+        # Check Steam Store connectivity
+        logger.info("Testing connection to Steam Store...")
+        response = requests.get("https://store.steampowered.com/", timeout=5)
+        if response.status_code == 200:
+            logger.info("Steam Store is accessible")
+        else:
+            logger.warning(f"Steam Store returned status code: {response.status_code}")
+        
+        # Check Steam API connectivity
+        logger.info("Testing connection to Steam API...")
+        response = requests.get("https://api.steampowered.com/ISteamWebAPIUtil/GetSupportedAPIList/v1/", timeout=5)
+        if response.status_code == 200:
+            logger.info("Steam API is accessible")
+        else:
+            logger.warning(f"Steam API returned status code: {response.status_code}")
+            
+        return True
+    except Exception as e:
+        logger.warning(f"Network connectivity test failed: {str(e)}")
+        logger.warning("The application may have limited functionality without network access")
+        return True  # Continue anyway, as we might be offline intentionally
+
+def run_checks():
+    """Run all checks and return overall status"""
+    logger.info("Starting initialization checks...")
     
     checks = [
-        ("Environment variables", check_environment_variables()),
-        ("Directories", check_directories()),
-        ("System dependencies", check_dependencies()),
-        ("Python modules", check_python_modules())
+        check_system(),
+        check_directories(),
+        check_steamcmd(),
+        check_network()
     ]
-
-    all_passed = all(result for _, result in checks)
     
-    logging.info("Check results:")
-    
-    for check_name, result in checks:
-        status = "✅ PASSED" if result else "❌ FAILED"
-        logging.info(f"{check_name}: {status}")
-
-    if all_passed:
-        logging.info("All checks passed! The application should start correctly.")
-        return 0
-    
-    logging.error("Some checks failed. Please fix the issues before starting the application.")
-    return 1
+    if all(checks):
+        logger.info("All checks passed successfully!")
+        return True
+    else:
+        logger.warning("Some checks failed. The application may have limited functionality.")
+        return False
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Add parent directory to path to ensure modules are found
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    
+    success = run_checks()
+    sys.exit(0 if success else 1)
